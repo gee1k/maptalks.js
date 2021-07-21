@@ -1,7 +1,7 @@
 import { isString } from '../core/util';
-import { createEl } from '../core/util/dom';
+import { createEl, addDomEvent, removeDomEvent } from '../core/util/dom';
 import Point from '../geo/Point';
-import { Geometry, Marker } from '../geometry';
+import { Geometry, Marker, MultiPoint, LineString, MultiLineString } from '../geometry';
 import UIComponent from './UIComponent';
 
 
@@ -19,9 +19,10 @@ import UIComponent from './UIComponent';
  * @instance
  */
 const options = {
+    'containerClass': 'maptalks-msgBox',
     'autoPan': true,
-    'autoCloseOn' : null,
-    'autoOpenOn' : 'click',
+    'autoCloseOn': null,
+    'autoOpenOn': 'click',
     'width': 300,
     'minHeight': 120,
     'custom': false,
@@ -145,17 +146,27 @@ class InfoWindow extends UIComponent {
             }
         }
         const dom = createEl('div');
-        dom.className = 'maptalks-msgBox';
+        if (this.options['containerClass']) {
+            dom.className = this.options['containerClass'];
+        }
         dom.style.width = this._getWindowWidth() + 'px';
+        dom.style.bottom = '0px'; // fix #657
         let content = '<em class="maptalks-ico"></em>';
         if (this.options['title']) {
             content += '<h2>' + this.options['title'] + '</h2>';
         }
-        const onClose = '"this.parentNode.style.display=\'none\';return false;"';
-        content += '<a href="javascript:void(0);" onclick=' + onClose +
-            ' ontouchend=' + onClose +
-            ' class="maptalks-close"></a><div class="maptalks-msgContent">' + this.options['content'] + '</div>';
+        content += '<a href="javascript:void(0);" class="maptalks-close"></a><div class="maptalks-msgContent"></div>';
         dom.innerHTML = content;
+        const msgContent = dom.querySelector('.maptalks-msgContent');
+        if (isString(this.options['content'])) {
+            msgContent.innerHTML = this.options['content'];
+        } else {
+            msgContent.appendChild(this.options['content']);
+        }
+        this._onCloseBtnClick = this.hide.bind(this);
+        const closeBtn = dom.querySelector('.maptalks-close');
+        addDomEvent(closeBtn, 'click touchend', this._onCloseBtnClick);
+
         return dom;
     }
 
@@ -166,23 +177,36 @@ class InfoWindow extends UIComponent {
      */
     getTransformOrigin() {
         const size = this.getSize();
-        const o = new Point(size['width'] / 2, size['height']);
-        if (!this.options['custom']) {
-            o._add(4, 12);
-        }
-        return o;
+        return size.width / 2 + 'px bottom';
     }
 
     getOffset() {
         const size = this.getSize();
-        const o = new Point(-size['width'] / 2, -size['height']);
+        const o = new Point(-size['width'] / 2, 0);
         if (!this.options['custom']) {
             o._sub(4, 12);
+        } else {
+            o._sub(0, size['height']);
         }
-        if (this.getOwner() instanceof Marker) {
-            const markerSize = this.getOwner().getSize();
-            if (markerSize) {
-                o._add(0, -markerSize['height']);
+        const owner = this.getOwner();
+        if (owner instanceof Marker || owner instanceof MultiPoint) {
+            let painter, markerSize;
+            if (owner instanceof Marker) {
+                painter = owner._getPainter();
+                markerSize = owner.getSize();
+            } else {
+                const children = owner.getGeometries();
+                if (!children || !children.length) {
+                    return o;
+                }
+                painter = children[0]._getPainter();
+                markerSize = children[0].getSize();
+            }
+            if (painter) {
+                const fixExtent = painter.getFixedExtent();
+                o._add(fixExtent.xmax - markerSize.width / 2, fixExtent.ymin);
+            } else {
+                o._add(0, -markerSize.height);
             }
         }
         return o;
@@ -217,15 +241,111 @@ class InfoWindow extends UIComponent {
         return events;
     }
 
+    onRemove() {
+        this.onDomRemove();
+    }
+
+    onDomRemove() {
+        if (this._onCloseBtnClick) {
+            const dom = this.getDOM();
+            const closeBtn = dom.childNodes[2];
+            removeDomEvent(closeBtn, 'click touchend', this._onCloseBtnClick);
+            delete this._onCloseBtnClick;
+        }
+    }
+
     _onAutoOpen(e) {
         const owner = this.getOwner();
         setTimeout(() => {
-            if (owner instanceof Marker) {
+            if (owner instanceof Marker || owner instanceof UIComponent) {
                 this.show(owner.getCoordinates());
+            } else if (owner instanceof MultiPoint) {
+                this.show(owner.findClosest(e.coordinate));
+            } else if ((owner instanceof LineString) || (owner instanceof MultiLineString)) {
+                if (this.getMap().getScale() >= 8) {
+                    e.coordinate = this._rectifyMouseCoordinte(owner, e.coordinate);
+                }
+                this.show(e.coordinate);
             } else {
                 this.show(e.coordinate);
             }
         }, 1);
+    }
+
+    _rectifyMouseCoordinte(owner, mouseCoordinate) {
+        if (owner instanceof LineString) {
+            return this._rectifyLineStringMouseCoordinate(owner, mouseCoordinate).coordinate;
+        } else if (owner instanceof MultiLineString) {
+            return owner.getGeometries().map(lineString => {
+                return this._rectifyLineStringMouseCoordinate(lineString, mouseCoordinate);
+            }).sort((a, b) => {
+                return a.dis - b.dis;
+            })[0].coordinate;
+        }
+        // others
+        return mouseCoordinate;
+    }
+
+    _rectifyLineStringMouseCoordinate(lineString, mouseCoordinate) {
+        const pts = lineString.getCoordinates().map(coordinate => {
+            return this.getMap().coordToContainerPoint(coordinate);
+        });
+        const mousePt = this.getMap().coordToContainerPoint(mouseCoordinate);
+        let minDis = Infinity, coordinateIndex = -1;
+        // Find the point with the shortest distance
+        for (let i = 0, len = pts.length; i < len; i++) {
+            const pt = pts[i];
+            const dis = mousePt.distanceTo(pt);
+            if (dis < minDis) {
+                minDis = dis;
+                coordinateIndex = i;
+            }
+        }
+        const filterPts = [];
+        if (coordinateIndex === 0) {
+            filterPts.push(pts[0], pts[1]);
+        } else if (coordinateIndex === pts.length - 1) {
+            filterPts.push(pts[coordinateIndex - 1], pts[coordinateIndex]);
+        } else {
+            filterPts.push(pts[coordinateIndex - 1], pts[coordinateIndex], pts[coordinateIndex + 1]);
+        }
+        const xys = [];
+        const { width, height } = this.getMap().getSize();
+        //Calculate all pixels in the field of view
+        for (let i = 0, len = filterPts.length - 1; i < len; i++) {
+            const pt1 = filterPts[i], pt2 = filterPts[i + 1];
+            if (pt1.x === pt2.x) {
+                const miny = Math.max(0, Math.min(pt1.y, pt2.y));
+                const maxy = Math.min(height, Math.max(pt1.y, pt2.y));
+                for (let y = miny; y <= maxy; y++) {
+                    xys.push(new Point(pt1.x, y));
+                }
+            } else {
+                const k = (pt2.y - pt1.y) / (pt2.x - pt1.x);
+                // y-y0=k(x-x0)
+                // y-pt1.y=k(x-pt1.x)
+                const minx = Math.max(0, Math.min(pt1.x, pt2.x));
+                const maxx = Math.min(width, Math.max(pt1.x, pt2.x));
+                for (let x = minx; x <= maxx; x++) {
+                    const y = k * (x - pt1.x) + pt1.y;
+                    xys.push(new Point(x, y));
+                }
+            }
+        }
+        let minPtDis = Infinity, ptIndex = -1;
+        // Find the point with the shortest distance
+        for (let i = 0, len = xys.length; i < len; i++) {
+            const pt = xys[i];
+            const dis = mousePt.distanceTo(pt);
+            if (dis < minPtDis) {
+                minPtDis = dis;
+                ptIndex = i;
+            }
+        }
+        return {
+            dis: minPtDis,
+            coordinate: ptIndex < 0 ? mouseCoordinate : this.getMap().containerPointToCoord(xys[ptIndex])
+        };
     }
 
     _getWindowWidth() {

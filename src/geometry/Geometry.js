@@ -12,7 +12,7 @@ import {
     forEachCoord,
     flash
 } from '../core/util';
-import { extendSymbol } from '../core/util/style';
+import { extendSymbol, getSymbolHash } from '../core/util/style';
 import { convertResourceUrl, getExternalResources } from '../core/util/resource';
 import Coordinate from '../geo/Coordinate';
 import Extent from '../geo/Extent';
@@ -25,6 +25,7 @@ import SpatialReference from '../map/spatial-reference/SpatialReference';
  * @property {Boolean} [options.id=null]            - id of the geometry
  * @property {Boolean} [options.visible=true]       - whether the geometry is visible.
  * @property {Boolean} [options.editable=true]      - whether the geometry can be edited.
+ * @property {Boolean} [options.interactive=true]   - whether the geometry can be interactived.
  * @property {String} [options.cursor=null]         - cursor style when mouseover the geometry, same as the definition in CSS.
  * @property {String} [options.measure=EPSG:4326]   - the measure code for the geometry, defines {@tutorial measureGeometry how it can be measured}.
  * @property {Boolean} [options.draggable=false]    - whether the geometry can be dragged.
@@ -37,6 +38,7 @@ import SpatialReference from '../map/spatial-reference/SpatialReference';
 const options = {
     'id': null,
     'visible': true,
+    'interactive': true,
     'editable': true,
     'cursor': null,
     'defaultProjection': 'EPSG:4326' // BAIDU, IDENTITY
@@ -269,13 +271,22 @@ class Geometry extends JSONAble(Eventable(Handlerable(Class))) {
     setSymbol(symbol) {
         this._symbol = this._prepareSymbol(symbol);
         this.onSymbolChanged();
+        this._symbolHash = getSymbolHash(symbol);
         return this;
+    }
+
+    /**
+     * Get symbol's hash code
+     * @return {String}
+     */
+    getSymbolHash() {
+        return this._symbolHash;
     }
 
     /**
      * Update geometry's current symbol.
      *
-     * @param  {Object} props - symbol properties to update
+     * @param  {Object | Array} props - symbol properties to update
      * @return {Geometry} this
      * @fires Geometry#symbolchange
      * @example
@@ -296,11 +307,23 @@ class Geometry extends JSONAble(Eventable(Handlerable(Class))) {
             return this;
         }
         let s = this._getSymbol();
-        if (s) {
+        if (Array.isArray(s)) {
+            if (!Array.isArray(props)) {
+                throw new Error('Parameter of updateSymbol is not an array.');
+            }
+            for (let i = 0; i < props.length; i++) {
+                if (s[i] && props[i]) {
+                    s[i] = extendSymbol(s[i], props[i]);
+                }
+            }
+        } else if (Array.isArray(props)) {
+            throw new Error('Geometry\'s symbol is not an array to update.');
+        } else if (s) {
             s = extendSymbol(s, props);
         } else {
             s = extendSymbol(this._getInternalSymbol(), props);
         }
+        this._eventSymbolProperties = props;
         return this.setSymbol(s);
     }
 
@@ -320,11 +343,11 @@ class Geometry extends JSONAble(Eventable(Handlerable(Class))) {
      */
     getExtent() {
         const prjExt = this._getPrjExtent();
-        if (prjExt) {
-            const p = this._getProjection();
-            const min = p.unproject(new Coordinate(prjExt['xmin'], prjExt['ymin'])),
-                max = p.unproject(new Coordinate(prjExt['xmax'], prjExt['ymax']));
-            return new Extent(min, max, this._getProjection());
+        const projection = this._getProjection();
+        if (prjExt && projection) {
+            const min = projection.unproject(new Coordinate(prjExt['xmin'], prjExt['ymin'])),
+                max = projection.unproject(new Coordinate(prjExt['xmax'], prjExt['ymax']));
+            return new Extent(min, max, projection);
         } else {
             return this._computeExtent(this._getMeasurer());
         }
@@ -335,9 +358,9 @@ class Geometry extends JSONAble(Eventable(Handlerable(Class))) {
      *
      * @returns {PointExtent}
      */
-    getContainerExtent() {
+    getContainerExtent(out) {
         const painter = this._getPainter();
-        return painter ? painter.getContainerExtent() : null;
+        return painter ? painter.getContainerExtent(out) : null;
     }
 
     /**
@@ -359,7 +382,7 @@ class Geometry extends JSONAble(Eventable(Handlerable(Class))) {
      * @example
      * var circle = new Circle([0, 0], 1000)
      *     .addTo(layer);
-     * var contains = circle.containsPoint([400, 300]);
+     * var contains = circle.containsPoint(new maptalks.Point(400, 300));
      */
     containsPoint(containerPoint, t) {
         if (!this.getMap()) {
@@ -460,7 +483,7 @@ class Geometry extends JSONAble(Eventable(Handlerable(Class))) {
             }
             return false;
         } else {
-            return (isNil(symbol['opacity']) || (isNumber(symbol['opacity']) && symbol['opacity'] > 0));
+            return (isNil(symbol['opacity']) || isObject(symbol['opacity']) || (isNumber(symbol['opacity']) && symbol['opacity'] > 0));
         }
     }
 
@@ -831,7 +854,7 @@ class Geometry extends JSONAble(Eventable(Handlerable(Class))) {
         }
         this._layer = layer;
         this._clearCache();
-        this._clearProjection();
+        // this._clearProjection();
         // this.callInitHooks();
     }
 
@@ -871,6 +894,7 @@ class Geometry extends JSONAble(Eventable(Handlerable(Class))) {
      * @param {Object} symbol - external symbol
      */
     _setExternSymbol(symbol) {
+        this._eventSymbolProperties = symbol;
         this._externSymbol = this._prepareSymbol(symbol);
         this.onSymbolChanged();
         return this;
@@ -952,10 +976,10 @@ class Geometry extends JSONAble(Eventable(Handlerable(Class))) {
 
     _verifyProjection() {
         const projection = this._getProjection();
-        if (this._projCode && (!projection || this._projCode !== projection.code)) {
+        if (this._projCode && projection && this._projCode !== projection.code) {
             this._clearProjection();
         }
-        this._projCode = projection ? projection.code : null;
+        this._projCode = projection ? projection.code : this._projCode;
     }
 
     //获取geometry样式中依赖的外部图片资源
@@ -965,14 +989,27 @@ class Geometry extends JSONAble(Eventable(Handlerable(Class))) {
     }
 
     _getPainter() {
-        if (!this._painter && this.getMap()) {
+        const layer = this.getLayer();
+        if (!this._painter && layer) {
             if (GEOMETRY_COLLECTION_TYPES.indexOf(this.type) !== -1) {
-                this._painter = new CollectionPainter(this);
-            } else {
-                this._painter = new Painter(this);
+                if (layer.constructor.getCollectionPainterClass) {
+                    const clazz = layer.constructor.getCollectionPainterClass();
+                    this._painter = new clazz(this);
+                }
+            } else if (layer.constructor.getPainterClass) {
+                const clazz = layer.constructor.getPainterClass();
+                this._painter = new clazz(this);
             }
         }
         return this._painter;
+    }
+
+    _getMaskPainter() {
+        if (this._maskPainter) {
+            return this._maskPainter;
+        }
+        this._maskPainter = this.getGeometries && this.getGeometries() ? new CollectionPainter(this, true) : new Painter(this);
+        return this._maskPainter;
     }
 
     _removePainter() {
@@ -984,6 +1021,14 @@ class Geometry extends JSONAble(Eventable(Handlerable(Class))) {
 
     _paint(extent) {
         if (this._painter) {
+            if (this._dirtyCoords) {
+                delete this._dirtyCoords;
+                const projection = this._getProjection();
+                if (projection) {
+                    this._pcenter = projection.project(this._coordinates);
+                    this._clearCache();
+                }
+            }
             this._painter.paint(extent);
         }
     }
@@ -1039,6 +1084,11 @@ class Geometry extends JSONAble(Eventable(Handlerable(Class))) {
         if (this._painter) {
             this._painter.refreshSymbol();
         }
+        const e = {};
+        if (this._eventSymbolProperties) {
+            e.properties = extend({}, this._eventSymbolProperties);
+            delete this._eventSymbolProperties;
+        }
         /**
          * symbolchange event.
          *
@@ -1046,8 +1096,9 @@ class Geometry extends JSONAble(Eventable(Handlerable(Class))) {
          * @type {Object}
          * @property {String} type - symbolchange
          * @property {Geometry} target - the geometry fires the event
+         * @property {Object} properties - symbol properties to update if has
          */
-        this._fireEvent('symbolchange');
+        this._fireEvent('symbolchange', e);
     }
 
     onConfig(conf) {
@@ -1143,6 +1194,25 @@ class Geometry extends JSONAble(Eventable(Handlerable(Class))) {
             }
         }
         return properties;
+    }
+
+
+    //------------- altitude + layer.altitude -------------
+    getAltitude() {
+        const layer = this.getLayer();
+        if (!layer) {
+            return 0;
+        }
+        const layerOpts = layer.options,
+            properties = this.getProperties();
+        const altitude = layerOpts['enableAltitude'] ? properties ? properties[layerOpts['altitudeProperty']] : 0 : 0;
+        const layerAltitude = layer.getAltitude ? layer.getAltitude() : 0;
+        if (Array.isArray(altitude)) {
+            return altitude.map(alt => {
+                return alt + layerAltitude;
+            });
+        }
+        return altitude + layerAltitude;
     }
 
 }

@@ -1,12 +1,14 @@
 import { isNil, isNumber, isArrayHasData, getValueOrDefault, sign } from '../../../core/util';
 import { isGradient, getGradientStamp } from '../../../core/util/style';
-import { getAlignPoint } from '../../../core/util/strings';
-import { hasFunctionDefinition } from '../../../core/mapbox';
+import { getAlignPoint, hashCode } from '../../../core/util/strings';
+import { hasFunctionDefinition, isFunctionDefinition } from '../../../core/mapbox';
 import Size from '../../../geo/Size';
 import Point from '../../../geo/Point';
 import PointExtent from '../../../geo/PointExtent';
 import Canvas from '../../../core/Canvas';
 import PointSymbolizer from './PointSymbolizer';
+
+const TEMP_SIZE = new Size(1, 1);
 
 export default class VectorMarkerSymbolizer extends PointSymbolizer {
 
@@ -70,7 +72,8 @@ export default class VectorMarkerSymbolizer extends PointSymbolizer {
         }
         for (let i = cookedPoints.length - 1; i >= 0; i--) {
             let point = cookedPoints[i];
-            const origin = this._rotate(ctx, point, this._getRotationAt(i));
+            // const origin = this._rotate(ctx, point, this._getRotationAt(i));
+            const origin = this.getRotation() ? this._rotate(ctx, point, this._getRotationAt(i)) : null;
             if (origin) {
                 point = origin;
             }
@@ -92,7 +95,8 @@ export default class VectorMarkerSymbolizer extends PointSymbolizer {
         const anchor = this._getAnchor(image.width, image.height);
         for (let i = cookedPoints.length - 1; i >= 0; i--) {
             let point = cookedPoints[i];
-            const origin = this._rotate(ctx, point, this._getRotationAt(i));
+            // const origin = this._rotate(ctx, point, this._getRotationAt(i));
+            const origin = this.getRotation() ? this._rotate(ctx, point, this._getRotationAt(i)) : null;
             if (origin) {
                 point = origin;
             }
@@ -104,11 +108,17 @@ export default class VectorMarkerSymbolizer extends PointSymbolizer {
     }
 
     _calMarkerSize() {
-        const lineWidth = this.strokeAndFill['lineWidth'],
-            shadow = 2 * (this.symbol['shadowBlur'] || 0), // add some tolerance for shadowOffsetX/Y
-            w = Math.round(this.style['markerWidth'] + lineWidth + 2 * shadow + this.padding * 2),
-            h = Math.round(this.style['markerHeight'] + lineWidth + 2 * shadow + this.padding * 2);
-        return [w, h];
+        if (!this._size) {
+            const lineWidth = this.strokeAndFill['lineWidth'],
+                shadow = 2 * (this.symbol['shadowBlur'] || 0), // add some tolerance for shadowOffsetX/Y
+                w = Math.round(this.style['markerWidth'] + lineWidth + 2 * shadow + this.padding * 2),
+                h = Math.round(this.style['markerHeight'] + lineWidth + 2 * shadow + this.padding * 2);
+            if (isFunctionDefinition(this.symbol['markerWidth']) || isFunctionDefinition(this.symbol['markerHeight'])) {
+                return [w, h];
+            }
+            this._size = [w, h];
+        }
+        return this._size;
     }
 
     _createMarkerImage(ctx, resources) {
@@ -127,7 +137,7 @@ export default class VectorMarkerSymbolizer extends PointSymbolizer {
 
     _stampSymbol() {
         if (!this._stamp) {
-            this._stamp = [
+            this._stamp = hashCode([
                 this.style['markerType'],
                 isGradient(this.style['markerFill']) ? getGradientStamp(this.style['markerFill']) : this.style['markerFill'],
                 this.style['markerFillOpacity'],
@@ -141,7 +151,7 @@ export default class VectorMarkerSymbolizer extends PointSymbolizer {
                 this.style['markerHeight'],
                 this.style['markerHorizontalAlignment'],
                 this.style['markerVerticalAlignment']
-            ].join('_');
+            ].join('_'));
         }
         return this._stamp;
     }
@@ -149,8 +159,10 @@ export default class VectorMarkerSymbolizer extends PointSymbolizer {
     _getAnchor(w, h) {
         const shadow = 2 * (this.symbol['shadowBlur'] || 0),
             margin = shadow + this.padding;
-        const p = getAlignPoint(new Size(w, h), this.style['markerHorizontalAlignment'], this.style['markerVerticalAlignment']);
-        if (p.x !== -w  / 2) {
+        TEMP_SIZE.width = w;
+        TEMP_SIZE.height = h;
+        const p = getAlignPoint(TEMP_SIZE, this.style['markerHorizontalAlignment'], this.style['markerVerticalAlignment']);
+        if (p.x !== -w / 2) {
             p.x -= sign(p.x + w / 2) * margin;
         }
         if (p.y !== -h / 2) {
@@ -174,6 +186,7 @@ export default class VectorMarkerSymbolizer extends PointSymbolizer {
 
     _getGraidentExtent(points) {
         const e = new PointExtent(),
+            dxdy = this.getDxDy(),
             m = this.getFixedExtent();
         if (Array.isArray(points)) {
             for (let i = points.length - 1; i >= 0; i--) {
@@ -182,10 +195,10 @@ export default class VectorMarkerSymbolizer extends PointSymbolizer {
         } else {
             e._combine(points);
         }
-        e['xmin'] += m['xmin'];
-        e['ymin'] += m['ymin'];
-        e['xmax'] += m['xmax'];
-        e['ymax'] += m['ymax'];
+        e['xmin'] += m['xmin'] - dxdy.x;
+        e['ymin'] += m['ymin'] - dxdy.y;
+        e['xmax'] += m['xmax'] - dxdy.x;
+        e['ymax'] += m['ymax'] - dxdy.y;
         return e;
     }
 
@@ -218,7 +231,7 @@ export default class VectorMarkerSymbolizer extends PointSymbolizer {
             hLineWidth = style['markerLineWidth'] / 2;
         if (markerType === 'ellipse') {
             //ellipse default
-            Canvas.ellipse(ctx, point, width / 2, height / 2, lineOpacity, fillOpacity);
+            Canvas.ellipse(ctx, point, width / 2, height / 2, height / 2, lineOpacity, fillOpacity);
         } else if (markerType === 'cross' || markerType === 'x') {
             for (let j = vectorArray.length - 1; j >= 0; j--) {
                 vectorArray[j]._add(point);
@@ -247,7 +260,7 @@ export default class VectorMarkerSymbolizer extends PointSymbolizer {
             Canvas.bezierCurveAndFill(ctx, vectorArray, lineOpacity, fillOpacity);
             ctx.lineCap = lineCap;
         } else if (markerType === 'pie') {
-            point = point.add(0, -hLineWidth);
+            point = point.add(0, hLineWidth);
             const angle = Math.atan(width / 2 / height) * 180 / Math.PI;
             const lineCap = ctx.lineCap;
             ctx.lineCap = 'round';
@@ -273,23 +286,16 @@ export default class VectorMarkerSymbolizer extends PointSymbolizer {
 
     getFixedExtent() {
         const dxdy = this.getDxDy(),
-            style = this.style;
-        const markerType = style['markerType'].toLowerCase();
-        const width = style['markerWidth'],
-            height = style['markerHeight'];
-        let result;
-        if (markerType === 'bar' || markerType === 'pie' || markerType === 'pin') {
-            result = new PointExtent(dxdy.add(-width / 2, -height), dxdy.add(width / 2, 0));
-        } else {
-            result = new PointExtent(dxdy.add(-width / 2, -height / 2), dxdy.add(width / 2, height / 2));
-        }
-        if (this.style['markerLineWidth']) {
-            result._expand(this.style['markerLineWidth'] / 2);
-        }
+            padding = this.padding * 2;
+        const size = this._calMarkerSize().map(d => d - padding);
+        const alignPoint = this._getAnchor(size[0], size[1]);
+        let result = new PointExtent(dxdy.add(0, 0), dxdy.add(size[0], size[1]));
+        result._add(alignPoint);
         const rotation = this.getRotation();
         if (rotation) {
             result = this._rotateExtent(result, rotation);
         }
+
         return result;
     }
 
@@ -312,7 +318,7 @@ export default class VectorMarkerSymbolizer extends PointSymbolizer {
             'markerWidth': getValueOrDefault(s['markerWidth'], 10),
             'markerHeight': getValueOrDefault(s['markerHeight'], 10),
 
-            'markerRotation' : getValueOrDefault(s['markerRotation'], 0)
+            'markerRotation': getValueOrDefault(s['markerRotation'], 0)
         };
         const markerType = result['markerType'];
         let ha, va;

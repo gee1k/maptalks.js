@@ -90,7 +90,7 @@ describe('Geometry.Marker', function () {
         it('can be icon', function (done) {
             var marker = new maptalks.Marker(center, {
                 symbol: {
-                    markerFile: 'images/control/2.png',
+                    markerFile: 'images/control/infownd-close-hover.png',
                     markerWidth: 30,
                     markerHeight: 22
                 }
@@ -145,7 +145,7 @@ describe('Geometry.Marker', function () {
             it('bottom-right', function (done) {
                 var marker = new maptalks.Marker(center, {
                     symbol: {
-                        markerFile: 'images/control/2.png',
+                        markerFile: 'images/control/infownd-close-hover.png',
                         markerWidth: 30,
                         markerHeight: 22,
                         markerHorizontalAlignment : 'right',
@@ -164,7 +164,7 @@ describe('Geometry.Marker', function () {
             it('top-left', function (done) {
                 var marker = new maptalks.Marker(center, {
                     symbol: {
-                        markerFile: 'images/control/2.png',
+                        markerFile: 'images/control/infownd-close-hover.png',
                         markerWidth: 30,
                         markerHeight: 22,
                         markerHorizontalAlignment : 'left',
@@ -183,7 +183,7 @@ describe('Geometry.Marker', function () {
             it('middle-middle', function (done) {
                 var marker = new maptalks.Marker(center, {
                     symbol: {
-                        markerFile: 'images/control/2.png',
+                        markerFile: 'images/control/infownd-close-hover.png',
                         markerWidth: 30,
                         markerHeight: 22,
                         markerHorizontalAlignment : 'middle',
@@ -198,6 +198,32 @@ describe('Geometry.Marker', function () {
                 });
                 layer.addGeometry(marker);
                 expect(marker.getSize().toArray()).to.be.eql([30, 22]);
+            });
+
+            it('multiple symbols with different alignments', function (done) {
+                var marker = new maptalks.Label('■■■■■■■■■', center, {
+                  'textSymbol': {
+                    'textFaceName': 'monospace',
+                    'textFill' : '#fff',
+                    'textLineSpacing': 1,
+                    'textHorizontalAlignment': 'right',
+                    'textDx': 15
+                  },
+                  'boxStyle' : {
+                    'padding' : [6, 2],
+                    'symbol' : {
+                      'markerType' : 'square',
+                      'markerFill' : '#000',
+                      'markerLineColor' : '#b4b3b3'
+                    }
+                  }
+                });
+                layer.once('layerload', function () {
+                    expect(layer).to.be.painted(11, 0, [0, 0, 0, 255]);
+                    expect(layer).to.be.painted(20, 0, [255, 255, 255, 255]);
+                    done();
+                });
+                layer.addGeometry(marker);
             });
 
         });
@@ -360,7 +386,7 @@ describe('Geometry.Marker', function () {
 
         var geometry = new maptalks.Marker(center, {
             symbol: {
-                markerFile : 'images/control/2.png',
+                markerFile : 'images/control/infownd-close-hover.png',
                 markerHeight : 30,
                 markerWidth : 22,
                 dx : 0,
@@ -385,12 +411,12 @@ describe('Geometry.Marker', function () {
     it('get image marker\'s extent', function (done) {
         var geometry = new maptalks.Marker(map.getExtent().getMin().substract(1E-7, 0), {
             symbol: {
-                markerFile : 'images/control/2.png'
+                markerFile : 'images/control/infownd-close-hover.png'
             }
         });
         layer = new maptalks.VectorLayer('id').addGeometry(geometry);
         layer.on('layerload', function () {
-            expect(layer._getRenderer()._geosToDraw.length).to.be.ok();
+            expect(layer.getRenderer()._geosToDraw.length).to.be.ok();
             done();
         });
         map.addLayer(layer);
@@ -493,7 +519,7 @@ describe('Geometry.Marker', function () {
                 } else if (maptalks.Browser.gecko3d) {
                     expect(layer).to.be.painted(10, 8);
                 } else {
-                    expect(layer).to.be.painted(10, 12);
+                    expect(layer).to.be.painted(10, 10);
                 }
 
                 done();
@@ -524,6 +550,45 @@ describe('Geometry.Marker', function () {
             });
             expect(layer).to.be.painted(52, 0);
         });
+
+        it('vector path marker color with identity', function (done) {
+            if (maptalks.Browser.ie) {
+                done();
+                return;
+            }
+            var marker = new maptalks.Marker(map.getCenter(), {
+                symbol : {
+                    'markerType': 'path',
+                    'markerPath': [{
+                        'path': 'M8 23l0 0 0 0 0 0 0 0 0 0c-4,-5 -8,-10 -8,-14 0,-5 4,-9 8,-9l0 0 0 0c4,0 8,4 8,9 0,4 -4,9 -8,14z M3,9 a5,5 0,1,0,0,-0.9Z',
+                        'fill': '#DE3333'
+                    }],
+                    'markerPathWidth': 16,
+                    'markerPathHeight': 23,
+                    'markerWidth'  : 8,
+                    'markerHeight' : 20,
+                    'markerFill': {
+                        type: 'identity',
+                        property: 'color'
+                    }
+                },
+                properties: {
+                    color: '#ff0'
+                }
+            });
+            var layer = new maptalks.VectorLayer('vector', marker);
+            var count = 0;
+            layer.on('layerload', function () {
+                count++;
+                if (count === 2) {
+                    expect(layer).to.be.painted(0, -3, [255, 255, 0]);
+                    done();
+                }
+
+            })
+                .addTo(map);
+
+        });
     });
 
     describe('marker rotation', function () {
@@ -546,6 +611,10 @@ describe('Geometry.Marker', function () {
         });
 
         it('rotate image marker with map', function (done) {
+            if (maptalks.Browser.ie) {
+                done();
+                return;
+            }
             map.setBearing(45);
             var marker = new maptalks.Marker(map.getCenter(), {
                 symbol : {
@@ -615,6 +684,10 @@ describe('Geometry.Marker', function () {
         });
 
         it('rotate text marker', function (done) {
+            if (maptalks.Browser.ie) {
+                done();
+                return;
+            }
             var marker = new maptalks.Marker(map.getCenter(), {
                 symbol : {
                     textName : '■■■■■■■■■',
@@ -633,6 +706,10 @@ describe('Geometry.Marker', function () {
         });
 
         it('rotate text marker with map', function (done) {
+            if (maptalks.Browser.ie) {
+                done();
+                return;
+            }
             map.setBearing(45);
             var marker = new maptalks.Marker(map.getCenter(), {
                 symbol : {

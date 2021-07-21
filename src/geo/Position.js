@@ -1,4 +1,4 @@
-import { isNil } from '../core/util';
+import { isNil } from '../core/util/common';
 
 /**
  * Abstract parent class for Point and Coordinate
@@ -27,6 +27,18 @@ class Position {
         if (this._isNaN()) {
             throw new Error('Position is NaN');
         }
+    }
+
+    /**
+     * Set point or coordinate's x, y value
+     * @params {Number} x - x value
+     * @params {Number} y - y value
+     * @return {Coordinate|Point} this
+     */
+    set(x, y) {
+        this.x = x;
+        this.y = y;
+        return this;
     }
 
     /**
@@ -66,6 +78,27 @@ class Position {
 
     ceil() {
         return new this.constructor(Math.ceil(this.x), Math.ceil(this.y));
+    }
+
+    /**
+     * Returns the distance between the current and the given point.
+     * @param  {Coordinate|Point} point - another point
+     * @return {Number} distance
+     */
+    distanceTo(point) {
+        const x = point.x - this.x,
+            y = point.y - this.y;
+        return Math.sqrt(x * x + y * y);
+    }
+
+    /**
+     * Return the magnitude of this point: this is the Euclidean
+     * distance from the 0, 0 coordinate to this point's x and y
+     * coordinates.
+     * @return {Number} magnitude
+     */
+    mag() {
+        return Math.sqrt(this.x * this.x + this.y * this.y);
     }
 
     _floor() {

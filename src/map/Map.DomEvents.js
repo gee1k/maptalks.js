@@ -199,7 +199,8 @@ Map.include(/** @lends Map.prototype */ {
         }
         let mimicClick = false;
         // ignore click lasted for more than 300ms.
-        if (type === 'mousedown' || (type === 'touchstart' && e.touches.length === 1)) {
+        // happen.js produce event without touches
+        if (type === 'mousedown' || (type === 'touchstart' && (!e.touches || e.touches.length === 1))) {
             this._mouseDownTime = now();
         } else if ((type === 'click' || type === 'touchend' || type === 'contextmenu')) {
             if (!this._mouseDownTime) {
@@ -244,7 +245,7 @@ Map.include(/** @lends Map.prototype */ {
         if (target) {
             while (target && target !== this._containerDOM) {
                 if (target.className && target.className.indexOf &&
-                    (target.className.indexOf('maptalks-control') >= 0  || (target.className.indexOf('maptalks-ui') >= 0 && !preTarget['eventsPropagation']))) {
+                    (target.className.indexOf('maptalks-control') >= 0  || (target.className.indexOf('maptalks-ui') >= 0 && preTarget && !preTarget['eventsPropagation']))) {
                     return true;
                 }
                 preTarget = target;

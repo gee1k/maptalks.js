@@ -1,3 +1,4 @@
+import { DEFAULT_TEXT_SIZE } from '../Constants';
 import { isString, isNil } from './common';
 import { getDomRuler, removeDomNode } from './dom';
 import Point from '../../geo/Point';
@@ -66,7 +67,7 @@ export function stringWidth(text, font) {
     return rulerCtx.measureText(text).width;
 }
 
-const fontHeight = {};
+// const fontHeight = {};
 
 /**
  * Gets size in pixel of the text with a certain font.
@@ -75,24 +76,21 @@ const fontHeight = {};
  * @return {Size}
  * @memberOf StringUtil
  */
-export function stringLength(text, font) {
-    if (stringLength.node) {
-        return stringLength.node(text, font);
-    } else {
-        const w = stringWidth(text, font);
-        if (!font) {
-            font = '_default_';
-        }
-        if (!fontHeight[font]) {
-            fontHeight[font] = getFontHeight(font);
-        }
-        return new Size(w, fontHeight[font]);
-    }
+export function stringLength(text, font, size) {
+    const w = stringWidth(text, font);
+    // if (!font) {
+    //     font = '_default_';
+    // }
+    // if (!fontHeight[font]) {
+    //     fontHeight[font] = getFontHeight(font);
+    // }
+    // return new Size(w, fontHeight[font]);
+    return new Size(w, size || DEFAULT_TEXT_SIZE);
 }
 
 export function getFontHeight(font) {
     //dom
-    const domRuler = getDomRuler();
+    const domRuler = getDomRuler('span');
     if (font !== '_default_') {
         domRuler.style.font = font;
     }
@@ -204,6 +202,8 @@ export function getAlignPoint(size, horizontalAlignment, verticalAlignment) {
     return new Point(alignW, alignH);
 }
 
+const DEFAULT_FONT = 'monospace';
+
 /**
  * Returns CSS Font from a symbol with text styles.
  * @param  {Object} style symbol with text styles
@@ -217,7 +217,7 @@ export function getFont(style) {
         return (style['textStyle'] && style['textStyle'] !== 'normal' ? style['textStyle'] + ' ' : '') +
             (style['textWeight'] && style['textWeight'] !== 'normal' ? style['textWeight'] + ' ' : '') +
             style['textSize'] + 'px ' +
-            (style['textFaceName'][0] === '"' ? style['textFaceName'] : '"' + style['textFaceName'] + '"');
+            (!style['textFaceName'] ? DEFAULT_FONT : (style['textFaceName'][0] === '"' ? style['textFaceName'] : '"' + style['textFaceName'] + '"'));
     }
 }
 
@@ -231,7 +231,7 @@ export function getFont(style) {
 export function splitTextToRow(text, style) {
     const font = getFont(style),
         lineSpacing = style['textLineSpacing'] || 0,
-        size = stringLength(text, font),
+        size = stringLength(text, font, style['textSize']),
         textWidth = size['width'],
         textHeight = size['height'],
         wrapChar = style['textWrapCharacter'],
@@ -301,4 +301,19 @@ export function splitTextToRow(text, style) {
         'rows': textRows,
         'rawSize': size
     };
+}
+
+export function hashCode(s) {
+    let hash = 0;
+    const strlen = s && s.length || 0;
+    if (!strlen) {
+        return hash;
+    }
+    let c;
+    for (let i = 0; i < strlen; i++) {
+        c = s.charCodeAt(i);
+        hash = ((hash << 5) - hash) + c;
+        hash = hash & hash; // Convert to 32bit integer
+    }
+    return hash;
 }

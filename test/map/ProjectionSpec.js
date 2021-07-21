@@ -87,8 +87,10 @@ describe('Map.Projection', function () {
         it('change center before changing spatial reference', function () {
             var newCenter = new maptalks.Coordinate(100, 0);
             map.setCenter(newCenter);
-            map.setSpatialReference({
-                projection:'EPSG:4326'
+            map.config({
+                spatialReference : {
+                    projection:'EPSG:4326'
+                }
             });
             expect(map.getProjection().code).to.be.eql('EPSG:4326');
             expect(map.getCenter()).to.closeTo(newCenter);
@@ -99,7 +101,7 @@ describe('Map.Projection', function () {
         it('change to IDENTITY', function () {
             map.setSpatialReference({
                 projection:'IDENTITY',
-                resolutions : [0, 10, 20],
+                resolutions : [1, 10, 20],
                 fullExtent:{
                     'top':0,
                     'left':0,
@@ -156,6 +158,33 @@ describe('Map.Projection', function () {
             var z = map.getFitZoom(map.getMaxExtent());
             expect(z).to.be.eql(7);
         });
+
+        it('rotate polygon with  IDENTITY projection, #726', function () {
+            map.setSpatialReference({
+                projection:'IDENTITY',
+                resolutions : [1, 10, 20],
+                fullExtent:{
+                    'top':0,
+                    'left':0,
+                    'bottom':1000000,
+                    'right':1000000
+                }
+            });
+
+            var vecLayer = new maptalks.VectorLayer('field').addTo(map);
+            var baseGeom = new maptalks.Polygon([[[0,0],[0,20],[20,30],[20,0]]], {
+                symbol : {
+                lineWidth : 2,
+                lineColor : '#000',
+                polygonFill : 'rgb(129, 0, 0)'
+                }
+            })
+            baseGeom.copy().addTo(vecLayer)
+                .translate(90,90)
+                .rotate(30).rotate(30).rotate(30);
+            var geojson = {"type":"Feature","geometry":{"type":"Polygon","coordinates":[[[0,0],[0,20],[20,30],[20,0],[0,0]]]},"properties":null};
+            expect(baseGeom.toGeoJSON()).to.be.eqlGeoJSON(geojson);
+        });
     });
 
     describe('change to Baidu', function () {
@@ -164,9 +193,15 @@ describe('Map.Projection', function () {
                 projection:'baidu'
             });
             map.options['minZoom'] = null;
-            expect(map.getMinZoom()).to.be.eql(3);
+            expect(map.getMinZoom()).to.be.eql(0);
             expect(map.getProjection().code).to.be.eql('BAIDU');
             expect(map.getCenter()).to.closeTo(center);
+        });
+
+        it('baidu projection with Infinity', function () {
+            var baiduProj = maptalks.SpatialReference.getProjectionInstance('baidu');
+            var a = baiduProj.project(new maptalks.Coordinate(Infinity, -Infinity));
+            var b = baiduProj.project(new maptalks.Coordinate(-Infinity, -Infinity));
         });
     });
 });

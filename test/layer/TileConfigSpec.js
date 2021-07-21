@@ -4,13 +4,15 @@ describe('TileConfig', function () {
 
     beforeEach(function () {
         container = document.createElement('div');
-        container.style.width = '1px';
-        container.style.height = '1px';
+        container.style.width = '150px';
+        container.style.height = '150px';
         document.body.appendChild(container);
     });
 
     afterEach(function () {
-        map.remove();
+        if (map) {
+            map.remove();
+        }
         REMOVE_CONTAINER(container);
     });
 
@@ -28,7 +30,7 @@ describe('TileConfig', function () {
         var projection = srs.getProjection();
         var tileSystem = maptalks.TileSystem.getDefault(projection);
         var fullExtent = srs.getFullExtent();
-        var tileConfig = new maptalks.TileConfig(tileSystem, fullExtent, new maptalks.Size(size, size));
+        var tileConfig = new maptalks.TileConfig(map, tileSystem, fullExtent, new maptalks.Size(size, size));
 
         // tileCoordToExtent
         var res = srs.getResolution(z);
@@ -55,12 +57,27 @@ describe('TileConfig', function () {
         var projection = srs.getProjection();
         var tileSystem = maptalks.TileSystem.getDefault(projection);
         var fullExtent = srs.getFullExtent();
-        var tileConfig = new maptalks.TileConfig(tileSystem, fullExtent, new maptalks.Size(size, size));
+        var tileConfig = new maptalks.TileConfig(map, tileSystem, fullExtent, new maptalks.Size(size, size));
 
         // tileCoordToExtent
         var res = srs.getResolution(z);
         var extent = tileConfig.getTilePrjExtent(x, y, res);
 
         expect(extent.contains(projection.project(new maptalks.Coordinate(121, 30.996)))).to.be.ok();
+    });
+
+    it('tile index in full extent', function () {
+        var tileSystem = [1,1,-20037508.34,-20037508.34];
+        var fullExtent = {
+            bottom: 3574191.5907699764,
+            left: 11581589.65334464,
+            right: 11588412.424935361,
+            top: 3579213.587178574
+        };
+
+        var tileConfig = new maptalks.TileConfig(map, tileSystem, fullExtent, new maptalks.Size(256, 256));
+        var fullIndex = tileConfig._getTileFullIndex(19.109257071294063);
+        console.log(fullIndex.toString());
+        expect(fullIndex.toString()).to.be.eql('6463,4826,6464,4827');
     });
 });

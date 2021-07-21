@@ -154,7 +154,7 @@ export function addDomEvent(obj, typeArr, handler, context) {
     };
     const types = typeArr.split(' ');
     for (let i = types.length - 1; i >= 0; i--) {
-        let type = types[i];
+        const type = types[i];
         if (!type) {
             continue;
         }
@@ -171,11 +171,13 @@ export function addDomEvent(obj, typeArr, handler, context) {
             callback: eventHandler,
             src: handler
         });
-        //firefox
-        if (type === 'mousewheel' && Browser.gecko) {
-            type = 'DOMMouseScroll';
+        // https://developer.mozilla.org/en-US/docs/Web/API/EventTarget/addEventListener
+        if (Browser.ie) {
+            // ie doesn't support options as the third parameter
+            obj.addEventListener(type, eventHandler, false);
+        } else {
+            obj.addEventListener(type, eventHandler, { capture: false, passive: false });
         }
-        obj.addEventListener(type, eventHandler, false);
     }
     return this;
 }
@@ -344,8 +346,8 @@ export function getEventContainerPoint(ev, dom) {
     }
     // div by scaleX, scaleY to fix #450
     return new Point(
-        ev.clientX / domPos[2] - domPos[0] - dom.clientLeft,
-        ev.clientY / domPos[3] - domPos[1] - dom.clientTop
+        (ev.clientX - domPos[0] - dom.clientLeft) / domPos[2],
+        (ev.clientY - domPos[1] - dom.clientTop) / domPos[3]
     );
 }
 

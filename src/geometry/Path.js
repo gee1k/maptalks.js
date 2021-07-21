@@ -1,4 +1,4 @@
-import { isNil, isNumber, isArrayHasData, isFunction, forEachCoord } from '../core/util';
+import { isNil, isNumber, isArrayHasData, isFunction } from '../core/util';
 import { Animation } from '../core/Animation';
 import Coordinate from '../geo/Coordinate';
 import Extent from '../geo/Extent';
@@ -8,15 +8,19 @@ import simplify from 'simplify-js';
 
 /**
  * @property {Object} options - configuration options
- * @property {String} [options.smoothness=0]      - line smoothing by quad bezier interporating, 0 by default
+ * @property {Number} [options.smoothness=0]      - line smoothing by quad bezier interporating, 0 by default
+ * @property {Boolean} [options.enableSimplify=true] - whether to simplify path before rendering
+ * @property {Number}  [options.simplifyTolerance=2] - tolerance to simplify path, the higher the simplify is more intense
+ * @property {Boolean} [options.enableClip=true] - whether to clip path with map's current extent
  * @property {Object} options.symbol - Path's default symbol
  * @memberOf Path
  * @instance
  */
 const options = {
-    'smoothness' : 0,
-    'enableClip' : true,
-    'enableSimplify' : true,
+    'smoothness': 0,
+    'enableClip': true,
+    'enableSimplify': true,
+    'simplifyTolerance': 2,
     'symbol': {
         'lineColor': '#000',
         'lineWidth': 2,
@@ -41,10 +45,11 @@ class Path extends Geometry {
         if (!painter) {
             return null;
         }
-        const map = this.getMap();
-        const extent = painter.getContainerExtent().convertTo(c => map.containerPointToCoord(c));
+        // const map = this.getMap();
+        // const extent = painter.getContainerExtent().convertTo(c => map.containerPointToCoord(c));
+        const extent = this.getExtent();
         return new Polygon(extent.toArray(), {
-            symbol : {
+            symbol: {
                 'lineWidth': 1,
                 'lineColor': '6b707b'
             }
@@ -85,11 +90,18 @@ class Path extends Geometry {
         const isPolygon = !!this.getShell;
         const animCoords = isPolygon ? this.getShell().concat(this.getShell()[0]) : this.getCoordinates();
         const projection = this._getProjection();
-        this._aniShowCenter = projection.unproject(this._getPrjExtent().getCenter());
+
+        const prjAnimCoords = projection.projectCoords(animCoords);
+
+        this._prjAniShowCenter = this._getPrjExtent().getCenter();
+        this._aniShowCenter = projection.unproject(this._prjAniShowCenter);
         const duration = options['duration'] || 1000,
-            length = this.getLength(),
             easing = options['easing'] || 'out';
         this.setCoordinates([]);
+        let length = 0;
+        for (let i = 1; i < prjAnimCoords.length; i++) {
+            length += prjAnimCoords[i].distanceTo(prjAnimCoords[i - 1]);
+        }
         const player = this._showPlayer = Animation.animate({
             't': duration
         }, {
@@ -106,32 +118,35 @@ class Path extends Geometry {
                 }
                 return;
             }
-            const currentCoord = this._drawAnimShowFrame(frame.styles.t, duration, length, animCoords);
+            const currentCoord = this._drawAnimShowFrame(frame.styles.t, duration, length, animCoords, prjAnimCoords);
             if (frame.state.playState === 'finished') {
                 delete this._showPlayer;
                 delete this._aniShowCenter;
+                delete this._prjAniShowCenter;
                 delete this._animIdx;
                 delete this._animLenSoFar;
+                delete this._animTailRatio;
                 this.setCoordinates(coordinates);
             }
             if (cb) {
                 cb(frame, currentCoord);
             }
-        });
+        }, this);
         player.play();
         return player;
     }
 
-    _drawAnimShowFrame(t, duration, length, coordinates) {
+    _drawAnimShowFrame(t, duration, length, coordinates, prjCoords) {
         if (t === 0) {
             return coordinates[0];
         }
-        const map = this.getMap();
+        const projection = this._getProjection();
+        // const map = this.getMap();
         const targetLength = t / duration * length;
         let segLen = 0;
         let i, l;
-        for (i = this._animIdx, l = coordinates.length; i < l - 1; i++) {
-            segLen = map.computeLength(coordinates[i], coordinates[i + 1]);
+        for (i = this._animIdx, l = prjCoords.length; i < l - 1; i++) {
+            segLen = prjCoords[i].distanceTo(prjCoords[i + 1]);
             if (this._animLenSoFar + segLen > targetLength) {
                 break;
             }
@@ -143,22 +158,36 @@ class Path extends Geometry {
             return coordinates[coordinates.length - 1];
         }
         const idx = this._animIdx;
-        const p1 = coordinates[idx],
-            p2 = coordinates[idx + 1],
+        const p1 = prjCoords[idx],
+            p2 = prjCoords[idx + 1],
             span = targetLength - this._animLenSoFar,
             r = span / segLen;
+        this._animTailRatio = r;
         const x = p1.x + (p2.x - p1.x) * r,
             y = p1.y + (p2.y - p1.y) * r,
-            targetCoord = new Coordinate(x, y);
-        const animCoords = coordinates.slice(0, this._animIdx + 1);
-        animCoords.push(targetCoord);
+            lastCoord = new Coordinate(x, y);
+        const targetCoord = projection.unproject(lastCoord);
         const isPolygon = !!this.getShell;
-        if (isPolygon) {
-            this.setCoordinates([this._aniShowCenter].concat(animCoords));
-        } else {
+        if (!isPolygon && this.options['smoothness'] > 0) {
+            //smooth line needs to set current coordinates plus 2 more to caculate correct control points
+            const animCoords = coordinates.slice(0, this._animIdx + 3);
             this.setCoordinates(animCoords);
+            const prjAnimCoords = prjCoords.slice(0, this._animIdx + 3);
+            this._setPrjCoordinates(prjAnimCoords);
+        } else {
+            const animCoords = coordinates.slice(0, this._animIdx + 1);
+            animCoords.push(targetCoord);
+            const prjAnimCoords = prjCoords.slice(0, this._animIdx + 1);
+            prjAnimCoords.push(lastCoord);
+            if (isPolygon) {
+                this.setCoordinates([this._aniShowCenter].concat(animCoords));
+                this._setPrjCoordinates([this._prjAniShowCenter].concat(prjAnimCoords));
+            } else {
+                this.setCoordinates(animCoords);
+                this._setPrjCoordinates(prjAnimCoords);
+            }
         }
-        return animCoords[animCoords.length - 1];
+        return targetCoord;
     }
 
     _getCenterInExtent(extent, coordinates, clipFn) {
@@ -209,7 +238,7 @@ class Path extends Geometry {
         }
         const map = this.getMap(),
             isSimplify = !disableSimplify && this._shouldSimplify(),
-            tolerance = 2 * map._getResolution(),
+            tolerance = this.options['simplifyTolerance'] * map._getResolution(),
             isMulti = Array.isArray(prjCoords[0]);
         delete this._simplified;
         if (isSimplify && !isMulti) {
@@ -220,14 +249,28 @@ class Path extends Geometry {
         if (isNil(zoom)) {
             zoom = map.getZoom();
         }
-        return forEachCoord(prjCoords, c => map._prjToPoint(c, zoom));
+        if (!Array.isArray(prjCoords)) {
+            return map._prjToPoint(prjCoords, zoom);
+        } else {
+            if (!Array.isArray(prjCoords[0])) {
+                return map._prjsToPoints(prjCoords, zoom);
+            }
+            const pts = [];
+            for (let i = 0, len = prjCoords.length; i < len; i++) {
+                const prjCoord = prjCoords[i];
+                const pt = map._prjsToPoints(prjCoord, zoom);
+                pts.push(pt);
+            }
+            return pts;
+        }
+        // return forEachCoord(prjCoords, c => map._prjToPoint(c, zoom));
     }
 
     _shouldSimplify() {
         const layer = this.getLayer(),
             properties = this.getProperties();
         const hasAltitude = properties && layer.options['enableAltitude'] && !isNil(properties[layer.options['altitudeProperty']]);
-        return layer && layer.options['enableSimplify'] && !hasAltitude && this.options['enableSimplify']/* && !this.options['smoothness'] */;
+        return layer && layer.options['enableSimplify'] && !hasAltitude && this.options['enableSimplify'] && !this._showPlayer/* && !this.options['smoothness'] */;
     }
 
     _setPrjCoordinates(prjPoints) {
@@ -236,12 +279,8 @@ class Path extends Geometry {
     }
 
     _getPrjCoordinates() {
-        const projection = this._getProjection();
-        if (!projection) {
-            return null;
-        }
         this._verifyProjection();
-        if (!this._prjCoords) {
+        if (!this._prjCoords && this._getProjection()) {
             this._prjCoords = this._projectCoords(this._coordinates);
         }
         return this._prjCoords;
@@ -349,6 +388,10 @@ class Path extends Geometry {
     }
 
     _coords2Extent(coords, proj) {
+        // linestring,  polygon
+        if (!coords || coords.length === 0 || (Array.isArray(coords[0]) && coords[0].length === 0)) {
+            return null;
+        }
         const result = new Extent(proj);
         for (let i = 0, l = coords.length; i < l; i++) {
             for (let j = 0, ll = coords[i].length; j < ll; j++) {

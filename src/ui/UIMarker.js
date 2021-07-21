@@ -1,4 +1,4 @@
-import { isString, flash } from '../core/util';
+import { isString, flash, isNil, extend } from '../core/util';
 import { on, off, createEl, stopPropagation } from '../core/util/dom';
 import Browser from '../core/Browser';
 import Handler from '../handler/Handler';
@@ -13,14 +13,19 @@ import UIComponent from './UIComponent';
  * @property {Boolean} [options.draggable=false]  - if the marker can be dragged.
  * @property {Number}  [options.single=false]     - if the marker is a global single one.
  * @property {String|HTMLElement}  options.content - content of the marker, can be a string type HTML code or a HTMLElement.
+ * @property {Number}  [options.altitude=0] - altitude.
  * @memberOf ui.UIMarker
  * @instance
  */
 const options = {
-    'eventsPropagation' : true,
+    'containerClass': null,
+    'eventsPropagation': true,
     'draggable': false,
     'single': false,
-    'content': null
+    'content': null,
+    'altitude': 0,
+    'minZoom': 0,
+    'maxZoom': null
 };
 
 const domEvents =
@@ -235,7 +240,8 @@ class UIMarker extends Handlerable(UIComponent) {
          */
         this.fire('positionchange');
         if (this.isVisible()) {
-            this.show();
+            this._coordinate = this._markerCoord;
+            this._setPosition();
         }
         return this;
     }
@@ -246,6 +252,16 @@ class UIMarker extends Handlerable(UIComponent) {
      */
     getCoordinates() {
         return this._markerCoord;
+    }
+
+    //accord with isSupport for tooltip
+    getCenter() {
+        return this.getCoordinates();
+    }
+
+    // for infowindow
+    getAltitude() {
+        return this.options.altitude || 0;
     }
 
     /**
@@ -326,6 +342,9 @@ class UIMarker extends Handlerable(UIComponent) {
         } else {
             dom = this.options['content'];
         }
+        if (this.options['containerClass']) {
+            dom.className = this.options['containerClass'];
+        }
         this._registerDOMEvents(dom);
         return dom;
     }
@@ -337,7 +356,7 @@ class UIMarker extends Handlerable(UIComponent) {
      */
     getOffset() {
         const size = this.getSize();
-        return new Point(-size['width'] / 2, -size['height'] / 2);
+        return new Point(-size.width / 2, -size.height / 2);
     }
 
     /**
@@ -346,8 +365,7 @@ class UIMarker extends Handlerable(UIComponent) {
      * @return {Point} transform origin
      */
     getTransformOrigin() {
-        const size = this.getSize();
-        return new Point(size['width'] / 2, size['height'] / 2);
+        return 'center center';
     }
 
     onDomRemove() {
@@ -410,6 +428,59 @@ class UIMarker extends Handlerable(UIComponent) {
         ];
         return anchors;
     }
+
+    _getViewPoint() {
+        let alt = 0;
+        if (this._owner) {
+            const altitude = this.getAltitude();
+            if (altitude > 0) {
+                alt = this._meterToPoint(this._coordinate, altitude);
+            }
+        }
+        return this.getMap().coordToViewPoint(this._coordinate, undefined, alt)
+            ._add(this.options['dx'], this.options['dy']);
+    }
+
+    _getDefaultEvents() {
+        return extend({}, super._getDefaultEvents(), { 'zooming zoomend': this.onZoomFilter });
+    }
+
+    _setPosition() {
+        //show/hide zoomFilter
+        this.onZoomFilter();
+        super._setPosition();
+    }
+
+    onZoomFilter() {
+        const dom = this.getDOM();
+        if (!dom) return;
+        if (!this.isVisible() && dom.style.display !== 'none') {
+            dom.style.display = 'none';
+        } else if (this.isVisible() && dom.style.display === 'none') {
+            dom.style.display = '';
+        }
+    }
+
+    isVisible() {
+        const map = this.getMap();
+        if (!map) {
+            return false;
+        }
+        if (!this.options['visible']) {
+            return false;
+        }
+        const zoom = map.getZoom();
+        const { minZoom, maxZoom } = this.options;
+        if (!isNil(minZoom) && zoom < minZoom || (!isNil(maxZoom) && zoom > maxZoom)) {
+            return false;
+        }
+        const dom = this.getDOM();
+        return dom && true;
+    }
+
+    isSupportZoomFilter() {
+        return true;
+    }
 }
 
 UIMarker.mergeOptions(options);
@@ -461,7 +532,7 @@ class UIMarkerDragHandler extends Handler {
     _prepareDragHandler() {
         this._dragHandler = new DragHandler(this.target.getDOM(), {
             'cancelOn': this._cancelOn.bind(this),
-            'ignoreMouseleave' : true
+            'ignoreMouseleave': true
         });
         this._dragHandler.on('mousedown', this._onMouseDown, this);
         this._dragHandler.on('dragging', this._dragging, this);

@@ -2,6 +2,10 @@ import { pushIn } from '../../core/util';
 import Layer from '../Layer';
 import TileLayer from './TileLayer';
 
+const options = {
+    'maxCacheSize': 1024
+};
+
 /**
  * @classdesc
  * A layer used to display a group of tile layers. <br>
@@ -98,7 +102,7 @@ class GroupTileLayer extends TileLayer {
             if (!layer.options['visible']) {
                 continue;
             }
-            const childGrid = layer.getTiles(z);
+            const childGrid = layer.getTiles(z, this);
             if (!childGrid || childGrid.count === 0) {
                 continue;
             }
@@ -130,8 +134,8 @@ class GroupTileLayer extends TileLayer {
             layer._doRemove();
             layer.off('show hide', this._onLayerShowHide, this);
         });
-        delete this.layerMap;
-        delete this._groupChildren;
+        this.layerMap = {};
+        this._groupChildren = [];
         super.onRemove();
     }
 
@@ -183,5 +187,6 @@ class GroupTileLayer extends TileLayer {
 }
 
 GroupTileLayer.registerJSONType('GroupTileLayer');
+GroupTileLayer.mergeOptions(options);
 
 export default GroupTileLayer;

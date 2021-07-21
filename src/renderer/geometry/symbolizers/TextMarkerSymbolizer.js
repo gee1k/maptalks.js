@@ -1,3 +1,4 @@
+import { DEFAULT_TEXT_SIZE } from '../../../core/Constants';
 import {
     IS_NODE,
     isNil,
@@ -61,7 +62,8 @@ export default class TextMarkerSymbolizer extends PointSymbolizer {
         Canvas.prepareCanvasFont(ctx, style);
         for (let i = 0, len = cookedPoints.length; i < len; i++) {
             let p = cookedPoints[i];
-            const origin = this._rotate(ctx, p, this._getRotationAt(i));
+            // const origin = this._rotate(ctx, p, this._getRotationAt(i));
+            const origin = this.getRotation() ? this._rotate(ctx, p, this._getRotationAt(i)) : null;
             if (origin) {
                 p = origin;
             }
@@ -119,7 +121,7 @@ export default class TextMarkerSymbolizer extends PointSymbolizer {
             'textFaceName': getValueOrDefault(s['textFaceName'], 'monospace'),
             'textWeight': getValueOrDefault(s['textWeight'], 'normal'), //'bold', 'bolder'
             'textStyle': getValueOrDefault(s['textStyle'], 'normal'), //'italic', 'oblique'
-            'textSize': getValueOrDefault(s['textSize'], 10),
+            'textSize': getValueOrDefault(s['textSize'], DEFAULT_TEXT_SIZE),
             'textFont': getValueOrDefault(s['textFont'], null),
             'textFill': getValueOrDefault(s['textFill'], '#000'),
             'textOpacity': getValueOrDefault(s['textOpacity'], 1),

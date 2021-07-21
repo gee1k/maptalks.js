@@ -1,7 +1,9 @@
-import { emptyImageUrl } from '../../../core/util';
 import TileLayer from '../../../layer/tile/TileLayer';
 import TileLayerCanvasRenderer from './TileLayerCanvasRenderer';
 import ImageGLRenderable from '../ImageGLRenderable';
+import Point from '../../../geo/Point';
+
+const TILE_POINT = new Point(0, 0);
 
 /**
  * @classdesc
@@ -29,30 +31,32 @@ class TileLayerGLRenderer extends ImageGLRenderable(TileLayerCanvasRenderer) {
 
     drawTile(tileInfo, tileImage) {
         const map = this.getMap();
-        if (!tileInfo || !map) {
-            return;
-        }
-        if (tileImage.src === emptyImageUrl) {
+        if (!tileInfo || !map || !tileImage) {
             return;
         }
 
-        const scale = map.getGLScale(tileInfo.z),
-            w = tileInfo.size[0] * scale,
-            h = tileInfo.size[1] * scale;
+        const scale = tileInfo._glScale = tileInfo._glScale || map.getGLScale(tileInfo.z);
+        const size = this.layer.getTileSize();
+        const w = size.width;
+        const h = size.height;
         if (tileInfo.cache !== false) {
             this._bindGLBuffer(tileImage, w, h);
         }
         if (!this._gl()) {
-            // fall back to canvas 2D
+            // fall back to canvas 2D, which is faster
             super.drawTile(tileInfo, tileImage);
             return;
         }
-        const point = tileInfo.point;
+        const { extent2d, offset } = tileInfo;
+        const point = TILE_POINT.set(extent2d.xmin - offset[0], tileInfo.extent2d.ymax - offset[1]);
         const x = point.x * scale,
             y = point.y * scale;
         const opacity = this.getTileOpacity(tileImage);
-        this.drawGLImage(tileImage, x, y, w, h, opacity);
-
+        let debugInfo = null;
+        if (this.layer.options['debug']) {
+            debugInfo =  this.getDebugInfo(tileInfo.id);
+        }
+        this.drawGLImage(tileImage, x, y, w, h, scale, opacity, debugInfo);
         if (opacity < 1) {
             this.setToRedraw();
         } else {
@@ -94,14 +98,18 @@ class TileLayerGLRenderer extends ImageGLRenderable(TileLayerCanvasRenderer) {
 
     loadTileImage(tileImage, url) {
         //image must set cors in webgl
-        tileImage.crossOrigin = this.layer.options['crossOrigin'] || '';
+        const crossOrigin = this.layer.options['crossOrigin'];
+        tileImage.crossOrigin = crossOrigin !== null ? crossOrigin : '';
         tileImage.src = url;
         return;
     }
 
     // prepare gl, create program, create buffers and fill unchanged data: image samplers, texture coordinates
     onCanvasCreate() {
-        this.createCanvas2();
+        //not in a GroupGLLayer
+        if (!this.canvas.gl || !this.canvas.gl.wrap) {
+            this.createCanvas2();
+        }
     }
 
     createContext() {
@@ -126,7 +134,7 @@ class TileLayerGLRenderer extends ImageGLRenderable(TileLayerCanvasRenderer) {
     }
 
     getCanvasImage() {
-        if (!this._gl()) {
+        if (!this._gl() || !this.canvas2) {
             return super.getCanvasImage();
         }
         const img = super.getCanvasImage();
@@ -139,7 +147,12 @@ class TileLayerGLRenderer extends ImageGLRenderable(TileLayerCanvasRenderer) {
     // decide whether the layer is renderer with gl.
     // when map is pitching, or fragmentShader is set in options
     _gl() {
-        return this.getMap() && !!this.getMap().getPitch() || this.layer && !!this.layer.options['fragmentShader'];
+        if (this.canvas.gl && this.canvas.gl.wrap) {
+            //in GroupGLLayer
+            return true;
+        }
+        const map = this.getMap();
+        return map && (map.getPitch() || map.getBearing()) || this.layer && !!this.layer.options['fragmentShader'];
     }
 
     deleteTile(tile) {
@@ -147,9 +160,11 @@ class TileLayerGLRenderer extends ImageGLRenderable(TileLayerCanvasRenderer) {
         if (tile && tile.image) {
             this.disposeImage(tile.image);
         }
+        delete tile.image;
     }
 
     onRemove() {
+        super.onRemove();
         this.removeGLCanvas();
     }
 }

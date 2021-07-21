@@ -43,6 +43,7 @@ describe('Geometry.Animation', function () {
                 }
             });
             function step(frame) {
+                expect(frame.styles.symbol.markerType).to.be.eql('x');
                 if (frame.state.playState !== 'finished') {
                     return;
                 }
@@ -168,6 +169,29 @@ describe('Geometry.Animation', function () {
                     return;
                 }
                 expect(circle.getRadius()).to.be.eql(1000);
+                done();
+            }
+            circle.animate({
+                radius:1000
+            }, {
+                duration : animSpeed
+            }, step);
+        });
+
+        it('should be able to re-animated', function (done) {
+            var circle = new maptalks.Circle([100, 0], 100);
+            function step(frame) {
+                if (frame.state.playState !== 'finished') {
+                    return;
+                }
+                circle.setRadius(100);
+                var player = circle.animate({
+                    radius:1000
+                }, {
+                    duration : animSpeed
+                }, step);
+                expect(circle.getRadius()).to.be.eql(100);
+                player.cancel();
                 done();
             }
             circle.animate({

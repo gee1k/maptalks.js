@@ -4,8 +4,8 @@ describe('SpatialReference.Update', function () {
 
     beforeEach(function () {
         container = document.createElement('div');
-        container.style.width = '1px';
-        container.style.height = '1px';
+        container.style.width = '300px';
+        container.style.height = '300px';
         document.body.appendChild(container);
         map = new maptalks.Map(container, {
             'zoom' : 14,
@@ -18,7 +18,23 @@ describe('SpatialReference.Update', function () {
         REMOVE_CONTAINER();
     });
 
-    it('TileLayer', function (done) {
+    it('SpatialReference update with resolutions', function () {
+        var res = Math.pow(2, 18);
+        var resolutions = [];
+        for (var i = 0; i < 25; i++) {
+            resolutions[i] = res;
+            res *= 0.5;
+        }
+        var spatialReference = {
+            projection: 'baidu',
+            resolutions: resolutions
+        };
+        expect(map.getMaxZoom()).to.be.eql(22);
+        map.setSpatialReference(spatialReference);
+        expect(map.getMaxZoom()).to.be.eql(24);
+    });
+
+    it('SpatialReference.TileLayer', function (done) {
         var tileLayer = new maptalks.TileLayer('base', {
             urlTemplate : '#'
         });
@@ -28,13 +44,15 @@ describe('SpatialReference.Update', function () {
             });
             var tiles = tileLayer.getTiles().tileGrids[0].tiles;
             var tile = tiles[tiles.length - 1];
-            expect(tile.point.toArray()).to.be.eql([-256, -256]);
+            expect(tile.extent2d.xmin).to.be.eql(0);
+            expect(tile.extent2d.ymax).to.be.eql(0);
             done();
         });
         map.setBaseLayer(tileLayer);
         var tiles = tileLayer.getTiles().tileGrids[0].tiles;
         var tile = tiles[tiles.length - 1];
-        expect(tile.point.toArray()).to.be.eql([-256.0000000001879, -256.0000000001879]);
+        expect(tile.extent2d.xmin).to.be.eql(0);
+        expect(tile.extent2d.ymax).to.be.eql(0);
     });
 
     var geometries = GEN_GEOMETRIES_OF_ALL_TYPES();

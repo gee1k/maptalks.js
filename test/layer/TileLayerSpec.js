@@ -4,10 +4,10 @@ describe('TileLayer', function () {
     var map;
     var center = new maptalks.Coordinate(118.846825, 32.046534);
 
-    function createMap() {
+    function createMap(w, h) {
         container = document.createElement('div');
-        container.style.width = '3px';
-        container.style.height = '3px';
+        container.style.width = w || '150px';
+        container.style.height = h || '150px';
         document.body.appendChild(container);
         var option = {
             zoom: 17,
@@ -54,6 +54,18 @@ describe('TileLayer', function () {
                     done();
                 });
                 map.addLayer(tile);
+            });
+            map.addLayer(tile);
+        });
+
+        it('invisible container, for #692', function (done) {
+            createMap('0px', '0px');
+            var tile = new maptalks.TileLayer('tile', {
+                renderer : 'canvas',
+                urlTemplate : '/resources/not-exists.png'
+            });
+            tile.once('layerload', function () {
+                done();
             });
             map.addLayer(tile);
         });
@@ -117,7 +129,27 @@ describe('TileLayer', function () {
                 renderer : 'canvas',
                 urlTemplate : '#'
             }).addTo(map);
-            expect(tile.getTiles().tileGrids[0].tiles.length).to.be.eql(1);
+            expect(tile.getTiles().tileGrids[0].tiles.length).to.be.eql(2);
+        });
+
+        it('tiles out of extent', function () {
+            createMap(1000, 1000);
+            var p = map.getProjection().project(map.getCenter());
+            var layer = new maptalks.TileLayer('base', {
+                renderer : 'canvas',
+                urlTemplate : '#',
+                repeatWorld :false,
+                spatialReference : {
+                  fullExtent : {
+                    'top': p.y,
+                    'left': p.x,
+                    'bottom': p.y,
+                    'right': p.x
+                  }
+                },
+                'attribution' :  '&copy; <a target="_blank" href="http://map.baidu.com">Baidu</a>'
+            }).addTo(map);
+            expect(layer.getTiles().tileGrids[0].tiles.length).to.be.eql(0);
         });
     });
 
@@ -165,6 +197,32 @@ describe('TileLayer', function () {
                 done();
             });
             map.setBaseLayer(tile);
+        });
+
+        it('#679, cascade tiles\'s bug on 4326', function (done) {
+            container = document.createElement('div');
+            container.style.width = '3px';
+            container.style.height = '3px';
+            document.body.appendChild(container);
+            map = new maptalks.Map(container, {
+                center: [241.7567321978039, 210.07750904461014],
+                zoom: 1,
+                bearing : 153.60000000000036,
+                pitch : 36,
+                minZoom:1,
+                maxZoom:18,
+                spatialReference:{
+                  projection:'EPSG:4326'
+                }
+            });
+            map.setBaseLayer(new maptalks.TileLayer('base', {
+                tileSystem : [1, -1, -180, 90],
+                crossOrigin:'Anonymous',
+                urlTemplate:'#'
+            }));
+            setTimeout(function () {
+                done();
+            }, 20);
         });
 
         it('baidu', function (done) {

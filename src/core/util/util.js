@@ -29,9 +29,7 @@ let requestAnimFrame, cancelAnimFrame;
 
         requestFn = window['requestAnimationFrame'] || getPrefixed('RequestAnimationFrame') || timeoutDefer;
         cancelFn = window['cancelAnimationFrame'] || getPrefixed('CancelAnimationFrame') ||
-            getPrefixed('CancelRequestAnimationFrame') || function (id) {
-                window.clearTimeout(id);
-            };
+            getPrefixed('CancelRequestAnimationFrame') || function (id) { window.clearTimeout(id); };
     } else {
         requestFn = timeoutDefer;
         cancelFn = clearTimeout;
@@ -106,11 +104,16 @@ export function parseJSON(str) {
     return JSON.parse(str);
 }
 
-export function pushIn(arr1, arr2) {
-    for (let i = 0, l = arr2.length; i < l; i++) {
-        arr1.push(arr2[i]);
+export function pushIn(dest) {
+    for (let i = 1; i < arguments.length; i++) {
+        const src = arguments[i];
+        if (src) {
+            for (let ii = 0, ll = src.length; ii < ll; ii++) {
+                dest.push(src[ii]);
+            }
+        }
     }
-    return arr1.length;
+    return dest.length;
 }
 
 export function removeFromArray(obj, array) {
@@ -231,22 +234,22 @@ export function isArrayHasData(obj) {
     return Array.isArray(obj) && obj.length > 0;
 }
 
+
+const urlPattern = /^([a-z][a-z\d+\-.]*:)?\/\//i;
 /**
  * Whether the input string is a valid url.
+ * form: https://github.com/axios/axios/blob/master/lib/helpers/isAbsoluteURL.js
  * @param  {String}  url - url to check
  * @return {Boolean}
  * @memberOf Util
  * @private
  */
 export function isURL(url) {
-    if (!url) {
-        return false;
-    }
-    const head = url.slice(0, 6);
-    if (head === 'http:/' || head === 'https:' || head === 'file:/') {
-        return true;
-    }
-    return false;
+    // A URL is considered absolute if it begins with "<scheme>://" or "//" (protocol-relative URL).
+    // RFC 3986 defines scheme name as a sequence of characters beginning with a letter and followed
+    // by any combination of letters, digits, plus, period, or hyphen.
+    // eslint-disable-next-line no-useless-escape
+    return urlPattern.test(url);
 }
 
 //改原先的regex名字为xWithQuote；不带引号的regex，/^url\(([^\'\"].*[^\'\"])\)$/i，为xWithoutQuote。然后在is函数里||测试，extract函数里if...else处理。没引号的匹配后，取matches[1]
@@ -261,17 +264,13 @@ export function isCssUrl(str) {
     if (!isString(str)) {
         return 0;
     }
-    const head = str.slice(0, 6);
-    if (head === 'http:/' || head === 'https:') {
-        return 3;
-    }
     if (cssUrlRe.test(str)) {
         return 1;
     }
     if (cssUrlReWithQuote.test(str)) {
         return 2;
     }
-    return 0;
+    return 3;
 }
 
 export function extractCssUrl(str) {
@@ -279,8 +278,7 @@ export function extractCssUrl(str) {
     let matches;
     if (test === 3) {
         return str;
-    }
-    if (test === 1) {
+    } else if (test === 1) {
         matches = cssUrlRe.exec(str);
         return matches[1];
     } else if (test === 2) {
@@ -441,4 +439,16 @@ export function flash(interval, count, cb, context) {
     }
     this._flashTimeout = setTimeout(flashGeo, interval);
     return this;
+}
+
+export function _defaults(obj, defaults) {
+    const keys = Object.getOwnPropertyNames(defaults);
+    for (let i = 0; i < keys.length; i++) {
+        const key = keys[i];
+        const value = Object.getOwnPropertyDescriptor(defaults, key);
+        if (value && value.configurable && obj[key] === undefined) {
+            Object.defineProperty(obj, key, value);
+        }
+    }
+    return obj;
 }

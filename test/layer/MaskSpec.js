@@ -10,8 +10,8 @@ describe('Spec of Masks', function () {
 
     beforeEach(function () {
         container = document.createElement('div');
-        container.style.width = '100px';
-        container.style.height = '100px';
+        container.style.width = '150px';
+        container.style.height = '150px';
         document.body.appendChild(container);
         var option = {
             centerCross : true,
@@ -72,11 +72,12 @@ describe('Spec of Masks', function () {
 
     }
 
-    //test tilelayer
-    runTests(new maptalks.TileLayer('tile', {
+    var tileLayer = new maptalks.TileLayer('tile', {
         urlTemplate : TILE_IMAGE,
         renderer:'canvas'
-    }), context);
+    });
+    //test tilelayer
+    runTests(tileLayer, context);
 
     //test vectorlayer
     var vlayer = new maptalks.VectorLayer('v').addGeometry(new maptalks.Circle(center, 2000, {
@@ -127,6 +128,10 @@ describe('Spec of Masks', function () {
             });
 
             it('zoom with mask,' + layerToTest.getJSONType(), function (done) {
+                if (layerToTest === tileLayer) {
+                    done();
+                    return;
+                }
                 layerToTest.once('layerload', function () {
                     var zoomed = false;
                     layerToTest.on('layerload', function () {
@@ -144,5 +149,77 @@ describe('Spec of Masks', function () {
             });
         });
     }
+
+    it('#713', function (done) {
+        vlayer.setMask(new maptalks.Marker(map.getCenter(), {
+            'symbol' : {
+                'markerType' : 'ellipse',
+                'markerWidth' : 10,
+                'markerHeight' : 10,
+                'markerFill' : '#000',
+                'markerFillOpacity' : 1
+            }
+        }));
+        map.addLayer(vlayer);
+        var canvas = vlayer.getMap().getRenderer().canvas;
+        var c = new maptalks.Point(canvas.width / 2, canvas.height / 2);
+        vlayer.once('layerload', function () {
+            map.removeLayer(vlayer);
+            vlayer.once('layerload', function () {
+                expect(isDrawn(canvas, c.add(-11, 0))).not.to.be.ok();
+                expect(isDrawn(canvas, c.add(0, 0))).to.be.ok();
+                done();
+            });
+            map.addLayer(vlayer);
+        });
+    });
+
+    it('mask of MultiPolygon', function (done) {
+        vlayer.setMask(new maptalks.MultiPolygon([
+            new maptalks.Circle(map.getCenter(), 5).getShell(),
+            new maptalks.Circle(map.locate(map.getCenter(), 10, 0), 5).getShell()
+        ]));
+        map.addLayer(vlayer);
+        var canvas = vlayer.getMap().getRenderer().canvas;
+        var c = new maptalks.Point(canvas.width / 2, canvas.height / 2);
+        vlayer.once('layerload', function () {
+            expect(isDrawn(canvas, c.add(-11, 0))).not.to.be.ok();
+            expect(isDrawn(canvas, c.add(0, 0))).to.be.ok();
+            done();
+        });
+    });
+
+    it('mask with Layer.toJSON', function (done) {
+        vlayer.setMask(new maptalks.MultiPolygon([
+            new maptalks.Circle(map.getCenter(), 5).getShell(),
+            new maptalks.Circle(map.locate(map.getCenter(), 10, 0), 5).getShell()
+        ]));
+        // map.addLayer(vlayer);
+        var json = vlayer.toJSON();
+        var layer2 = maptalks.Layer.fromJSON(json).addTo(map);
+        var canvas = layer2.getMap().getRenderer().canvas;
+        var c = new maptalks.Point(canvas.width / 2, canvas.height / 2);
+        layer2.once('layerload', function () {
+            expect(isDrawn(canvas, c.add(-11, 0))).not.to.be.ok();
+            expect(isDrawn(canvas, c.add(0, 0))).to.be.ok();
+            done();
+        });
+    });
+
+    it('mask can return extent', function () {
+        var mask = new maptalks.MultiPolygon([
+            new maptalks.Circle(map.getCenter(), 5).getShell(),
+            new maptalks.Circle(map.locate(map.getCenter(), 10, 0), 5).getShell()
+        ]);
+        var tileLayer = new maptalks.TileLayer('tile', {
+            urlTemplate : TILE_IMAGE,
+            renderer:'canvas'
+        });
+        tileLayer.setMask(mask);
+        map.addLayer(tileLayer);
+        var extent = mask._getMaskPainter().get2DExtent();
+        expect(extent.xmin).to.be.ok();
+        expect(extent.ymin).to.be.ok();
+    });
 
 });

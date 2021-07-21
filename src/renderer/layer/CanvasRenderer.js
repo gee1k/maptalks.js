@@ -31,7 +31,7 @@ class CanvasRenderer extends Class {
      * Render the layer.
      * Call checkResources
      */
-    render() {
+    render(framestamp) {
         this.prepareRender();
         if (!this.getMap() || !this.layer.isVisible()) {
             return;
@@ -41,6 +41,10 @@ class CanvasRenderer extends Class {
             this.resources = new ResourceCache();
             /* eslint-enable no-use-before-define */
         }
+        this.checkAndDraw(this._tryToDraw, framestamp);
+    }
+
+    checkAndDraw(drawFn, ...args) {
         if (this.checkResources) {
             const resources = this.checkResources();
             if (resources.length > 0) {
@@ -61,10 +65,10 @@ class CanvasRenderer extends Class {
                     }
                 });
             } else {
-                this._tryToDraw(this);
+                drawFn.call(this, ...args);
             }
         } else {
-            this._tryToDraw(this);
+            drawFn.call(this, ...args);
         }
     }
 
@@ -101,11 +105,15 @@ class CanvasRenderer extends Class {
      * @private
      */
     testIfNeedRedraw() {
-        if (this._loadingResource || !this.drawOnInteracting) {
+        const map = this.getMap();
+        if (this._loadingResource) {
             return false;
         }
         if (this._toRedraw) {
             return true;
+        }
+        if (map.isInteracting() && !this.drawOnInteracting) {
+            return false;
         }
         if (this.needToRedraw()) {
             return true;
@@ -119,7 +127,7 @@ class CanvasRenderer extends Class {
      */
     needToRedraw() {
         const map = this.getMap();
-        if (map.isInteracting()) {
+        if (map.isInteracting() || map.getRenderer().isViewChanged()) {
             // don't redraw when map is moving without any pitch
             return !(!map.getPitch() && map.isMoving() && !map.isZooming() && !map.isRotating() && !this.layer.options['forceRenderOnMoving']);
         }
@@ -133,6 +141,10 @@ class CanvasRenderer extends Class {
 
     }
 
+    isLoadingResource() {
+        return this._loadingResource;
+    }
+
     isRenderComplete() {
         return !!this._renderComplete;
     }
@@ -141,7 +153,7 @@ class CanvasRenderer extends Class {
      * Whether must call render instead of drawOnInteracting when map is interacting
      */
     mustRenderOnInteracting() {
-        return !this._painted || (this.checkResources && this.checkResources().length > 0);
+        return !this._painted;
     }
 
     /**
@@ -175,17 +187,18 @@ class CanvasRenderer extends Class {
     remove() {
         this.onRemove();
         delete this._loadingResource;
-        delete this._southWest;
+        delete this.southWest;
         delete this.canvas;
         delete this.context;
+        delete this.canvasExtent2D;
         delete this._extent2D;
         delete this.resources;
         delete this.layer;
     }
 
-    onRemove() {}
+    onRemove() { }
 
-    onAdd() {}
+    onAdd() { }
 
     /**
      * Get map
@@ -215,7 +228,7 @@ class CanvasRenderer extends Class {
             return null;
         }
         // size = this._extent2D.getSize(),
-        const containerPoint = map._pointToContainerPoint(this._southWest)._add(0, -map.height);
+        const containerPoint = map._pointToContainerPoint(this.southWest)._add(0, -map.height);
         return {
             'image': this.canvas,
             'layer': this.layer,
@@ -275,12 +288,13 @@ class CanvasRenderer extends Class {
             return false;
         }
         const map = this.getMap();
+        const r = map.getDevicePixelRatio();
         const size = map.getSize();
-        if (point.x < 0 || point.x > size['width'] || point.y < 0 || point.y > size['height']) {
+        if (point.x < 0 || point.x > size['width'] * r || point.y < 0 || point.y > size['height'] * r) {
             return false;
         }
         try {
-            const imgData = this.context.getImageData(point.x, point.y, 1, 1).data;
+            const imgData = this.context.getImageData(r * point.x, r * point.y, 1, 1).data;
             if (imgData[3] > 0) {
                 return true;
             }
@@ -333,16 +347,16 @@ class CanvasRenderer extends Class {
 
     /**
      * Prepare rendering
-     * Set necessary properties, like this._renderZoom/ this._extent2D, this._southWest
+     * Set necessary properties, like this._renderZoom/ this.canvasExtent2D, this.southWest
      * @private
      */
     prepareRender() {
         delete this._renderComplete;
         const map = this.getMap();
         this._renderZoom = map.getZoom();
-        this._extent2D = map._get2DExtent();
+        this.canvasExtent2D = this._extent2D = map._get2DExtent();
         //change from northWest to southWest, because northwest's point <=> containerPoint changes when pitch >= 72
-        this._southWest = map._containerPointToPoint(new Point(0, map.height));
+        this.southWest = map._containerPointToPoint(new Point(0, map.height));
     }
 
     /**
@@ -354,7 +368,7 @@ class CanvasRenderer extends Class {
         }
         const map = this.getMap();
         const size = map.getSize();
-        const r = Browser.retina ? 2 : 1,
+        const r = map.getDevicePixelRatio(),
             w = r * size.width,
             h = r * size.height;
         if (this.layer._canvas) {
@@ -384,12 +398,15 @@ class CanvasRenderer extends Class {
             return;
         }
         this.context = this.canvas.getContext('2d');
+        if (!this.context) {
+            return;
+        }
         if (this.layer.options['globalCompositeOperation']) {
             this.context.globalCompositeOperation = this.layer.options['globalCompositeOperation'];
         }
-        if (Browser.retina) {
-            const r = 2;
-            this.context.scale(r, r);
+        const dpr = this.getMap().getDevicePixelRatio();
+        if (dpr !== 1) {
+            this.context.scale(dpr, dpr);
         }
     }
 
@@ -397,8 +414,8 @@ class CanvasRenderer extends Class {
         if (!this.context) {
             return;
         }
-        const r = Browser.retina ? 2 : 1;
-        this.context.setTransform(r, 0, 0, r, 0, 0);
+        const dpr = this.getMap().getDevicePixelRatio();
+        this.context.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
 
     /**
@@ -411,14 +428,14 @@ class CanvasRenderer extends Class {
             return;
         }
         const size = canvasSize || this.getMap().getSize();
-        const r = Browser.retina ? 2 : 1;
+        const r = this.getMap().getDevicePixelRatio();
         if (canvas.width === r * size.width && canvas.height === r * size.height) {
             return;
         }
         //retina support
         canvas.height = r * size.height;
         canvas.width = r * size.width;
-        if (Browser.retina && this.context) {
+        if (r !== 1 && this.context) {
             this.context.scale(r, r);
         }
         if (this.layer._canvas && canvas.style) {
@@ -447,6 +464,7 @@ class CanvasRenderer extends Class {
         if (!this.canvas) {
             this.createCanvas();
             this.createContext();
+            this.layer.onCanvasCreate();
             /**
              * canvascreate event, fired when canvas created.
              *
@@ -458,13 +476,13 @@ class CanvasRenderer extends Class {
              * @property {WebGLRenderingContext2D} gl  - canvas's webgl context
              */
             this.layer.fire('canvascreate', {
-                'context' : this.context,
-                'gl' : this.gl
+                'context': this.context,
+                'gl': this.gl
             });
         } else {
+            this.resetCanvasTransform();
             this.clearCanvas();
             this.resizeCanvas();
-            this.resetCanvasTransform();
         }
         delete this._maskExtent;
         const mask = this.layer.getMask();
@@ -472,19 +490,18 @@ class CanvasRenderer extends Class {
         if (!mask) {
             this.layer.fire('renderstart', {
                 'context': this.context,
-                'gl' : this.gl
+                'gl': this.gl
             });
             return null;
         }
-        const maskExtent2D = this._maskExtent = mask._getPainter().get2DExtent();
+        const maskExtent2D = this._maskExtent = mask._getMaskPainter().get2DExtent();
         if (!maskExtent2D.intersects(this._extent2D)) {
             this.layer.fire('renderstart', {
                 'context': this.context,
-                'gl' : this.gl
+                'gl': this.gl
             });
             return maskExtent2D;
         }
-        this._shouldClip = true;
         /**
          * renderstart event, fired when layer starts to render.
          *
@@ -496,34 +513,46 @@ class CanvasRenderer extends Class {
          */
         this.layer.fire('renderstart', {
             'context': this.context,
-            'gl' : this.gl
+            'gl': this.gl
         });
         return maskExtent2D;
     }
 
     clipCanvas(context) {
         const mask = this.layer.getMask();
-        if (!mask || !this._shouldClip) {
+        if (!mask) {
             return false;
         }
-        const old = this._southWest;
+        const old = this.southWest;
         const map = this.getMap();
         //when clipping, layer's southwest needs to be reset for mask's containerPoint conversion
-        this._southWest = map._containerPointToPoint(new Point(0, map.height));
+        this.southWest = map._containerPointToPoint(new Point(0, map.height));
         context.save();
-        if (Browser.retina) {
+        const dpr = map.getDevicePixelRatio();
+        if (dpr !== 1) {
             context.save();
-            context.scale(2, 2);
+            context.scale(dpr, dpr);
         }
-        mask._getPainter().paint(null, context);
-        if (Browser.retina) {
+        // Handle MultiPolygon
+        if (mask.getGeometries) {
+            context.isMultiClip = true;
+            const masks = mask.getGeometries() || [];
+            context.beginPath();
+            masks.forEach(_mask => {
+                const painter = _mask._getMaskPainter();
+                painter.paint(null, context);
+            });
+            context.stroke();
+            delete context.isMultiClip;
+        } else {
+            const painter = mask._getMaskPainter();
+            painter.paint(null, context);
+        }
+        if (dpr !== 1) {
             context.restore();
         }
         context.clip();
-        this._southWest = old;
-        if (this.isRenderComplete()) {
-            this._shouldClip = false;
-        }
+        this.southWest = old;
         return true;
     }
 
@@ -533,10 +562,10 @@ class CanvasRenderer extends Class {
      */
     getViewExtent() {
         return {
-            'extent' : this._extent2D,
-            'maskExtent' : this._maskExtent,
-            'zoom' : this._renderZoom,
-            'southWest' : this._southWest
+            'extent': this._extent2D,
+            'maskExtent': this._maskExtent,
+            'zoom': this._renderZoom,
+            'southWest': this.southWest
         };
     }
 
@@ -557,7 +586,7 @@ class CanvasRenderer extends Class {
              */
             this.layer.fire('renderend', {
                 'context': this.context,
-                'gl' : this.gl
+                'gl': this.gl
             });
             this.setCanvasUpdated();
         }
@@ -569,17 +598,17 @@ class CanvasRenderer extends Class {
      */
     getEvents() {
         return {
-            '_zoomstart' : this.onZoomStart,
-            '_zooming' : this.onZooming,
-            '_zoomend' : this.onZoomEnd,
-            '_resize'  : this.onResize,
-            '_movestart' : this.onMoveStart,
-            '_moving' : this.onMoving,
-            '_moveend' : this.onMoveEnd,
-            '_dragrotatestart' : this.onDragRotateStart,
-            '_dragrotating' : this.onDragRotating,
-            '_dragrotateend' : this.onDragRotateEnd,
-            '_spatialreferencechange' : this.onSpatialReferenceChange
+            '_zoomstart': this.onZoomStart,
+            '_zooming': this.onZooming,
+            '_zoomend': this.onZoomEnd,
+            '_resize': this.onResize,
+            '_movestart': this.onMoveStart,
+            '_moving': this.onMoving,
+            '_moveend': this.onMoveEnd,
+            '_dragrotatestart': this.onDragRotateStart,
+            '_dragrotating': this.onDragRotating,
+            '_dragrotateend': this.onDragRotateEnd,
+            '_spatialreferencechange': this.onSpatialReferenceChange
         };
     }
 
@@ -603,19 +632,19 @@ class CanvasRenderer extends Class {
     * onZooming
     * @param  {Object} param event parameters
     */
-    onZooming() {}
+    onZooming() { }
 
     /**
     * onMoveStart
     * @param  {Object} param event parameters
     */
-    onMoveStart() {}
+    onMoveStart() { }
 
     /**
     * onMoving
     * @param  {Object} param event parameters
     */
-    onMoving() {}
+    onMoving() { }
 
     /**
     * onMoveEnd
@@ -639,13 +668,13 @@ class CanvasRenderer extends Class {
     * onDragRotateStart
     * @param  {Object} param event parameters
     */
-    onDragRotateStart() {}
+    onDragRotateStart() { }
 
     /**
     * onDragRotating
     * @param  {Object} param event parameters
     */
-    onDragRotating() {}
+    onDragRotating() { }
 
     /**
     * onDragRotateEnd
@@ -670,35 +699,36 @@ class CanvasRenderer extends Class {
         return this._drawTime;
     }
 
-    _tryToDraw() {
+    _tryToDraw(framestamp) {
         this._toRedraw = false;
         if (!this.canvas && this.layer.isEmpty && this.layer.isEmpty()) {
             this._renderComplete = true;
             // not to create canvas when layer is empty
             return;
         }
-        this._drawAndRecord();
+        this._drawAndRecord(framestamp);
     }
 
-    _drawAndRecord() {
+    _drawAndRecord(framestamp) {
         if (!this.getMap()) {
             return;
         }
         const painted = this._painted;
         this._painted = true;
         let t = now();
-        this.draw();
+        this.draw(framestamp);
         t = now() - t;
         //reduce some time in the first draw
-        this._drawTime = painted ? t  : t / 2;
-        if (painted && this.layer.options['logDrawTime']) {
-            console.log('drawTime:', this.layer.getId(), this._drawTime);
+        this._drawTime = painted ? t : t / 2;
+        if (painted && this.layer && this.layer.options['logDrawTime']) {
+            console.log(this.layer.getId(), 'frameTimeStamp:', framestamp, 'drawTime:', this._drawTime);
         }
     }
 
     _promiseResource(url) {
         const me = this, resources = this.resources,
             crossOrigin = this.layer.options['crossOrigin'];
+        const renderer = this.layer.options['renderer'] || '';
         return function (resolve) {
             if (resources.isResourceLoaded(url, true)) {
                 resolve(url);
@@ -707,6 +737,8 @@ class CanvasRenderer extends Class {
             const img = new Image();
             if (!isNil(crossOrigin)) {
                 img['crossOrigin'] = crossOrigin;
+            } else if (renderer !== 'canvas') {
+                img['crossOrigin'] = '';
             }
             if (isSVG(url[0]) && !IS_NODE) {
                 //amplify the svg image to reduce loading.
@@ -732,7 +764,7 @@ class CanvasRenderer extends Class {
                 resources.markErrorResource(url);
                 resolve(url);
             };
-            loadImage(img,  url);
+            loadImage(img, url);
         };
 
     }

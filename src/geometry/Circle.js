@@ -83,13 +83,14 @@ class Circle extends CenterMixin(Polygon) {
             radius = this.getRadius();
         const shell = [];
         let rad, dx, dy;
-        for (let i = 0; i < numberOfPoints; i++) {
-            rad = (360 * i / numberOfPoints) * Math.PI / 180;
+        for (let i = 0, len = numberOfPoints - 1; i < len; i++) {
+            rad = (360 * i / len) * Math.PI / 180;
             dx = radius * Math.cos(rad);
             dy = radius * Math.sin(rad);
             const vertex = measurer.locate(center, dx, dy);
             shell.push(vertex);
         }
+        shell.push(shell[0]);
         return shell;
     }
 
@@ -124,9 +125,12 @@ class Circle extends CenterMixin(Polygon) {
         }
         const pcenter = this._getPrjCoordinates();
         const pminmax = minmax.map(c => projection.project(c));
-        const dx = Math.min(Math.abs(pminmax[0].x - pcenter.x), Math.abs(pminmax[1].x - pcenter.x)),
-            dy = Math.min(Math.abs(pminmax[2].y - pcenter.y), Math.abs(pminmax[3].y - pcenter.y));
-        return new Extent(pcenter.sub(dx, dy), pcenter.add(dx, dy));
+        const leftx = pminmax[0].x - pcenter.x;
+        const rightx = pminmax[1].x - pcenter.x;
+        const topy = pminmax[2].y - pcenter.y;
+        const bottomy = pminmax[3].y - pcenter.y;
+
+        return new Extent(pcenter.add(leftx, topy), pcenter.add(rightx, bottomy));
     }
 
     _computeExtent(measurer) {

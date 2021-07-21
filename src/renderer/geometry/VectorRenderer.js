@@ -1,5 +1,4 @@
 import { pushIn, isNumber } from '../../core/util';
-import Size from '../../geo/Size';
 import Point from '../../geo/Point';
 import Canvas from '../../core/Canvas';
 import Geometry from '../../geometry/Geometry';
@@ -11,14 +10,37 @@ import Path from '../../geometry/Path';
 import LineString from '../../geometry/LineString';
 import Polygon from '../../geometry/Polygon';
 
+const TEMP_WITHIN = {
+    within: false,
+    center: [0, 0]
+};
+// bbox in pixel
+function isWithinPixel(painter) {
+    if (!painter || !painter._containerBbox) {
+        TEMP_WITHIN.within = false;
+    } else {
+        TEMP_WITHIN.within = false;
+        const { minx, miny, maxx, maxy } = painter._containerBbox;
+        const offsetx = Math.abs(maxx - minx);
+        const offsety = Math.abs(maxy - miny);
+        if (offsetx <= 1 && offsety <= 1) {
+            TEMP_WITHIN.within = true;
+            TEMP_WITHIN.center[0] = (minx + maxx) / 2;
+            TEMP_WITHIN.center[1] = (miny + maxy) / 2;
+        }
+        delete painter._containerBbox;
+    }
+    return TEMP_WITHIN;
+}
+
 Geometry.include({
-    _redrawWhenPitch : () => false,
+    _redrawWhenPitch: () => false,
 
     _redrawWhenRotate: () => false
 });
 
 const el = {
-    _redrawWhenPitch : () => true,
+    _redrawWhenPitch: () => true,
 
     _redrawWhenRotate: function () {
         return (this instanceof Ellipse) || (this instanceof Sector);
@@ -26,7 +48,7 @@ const el = {
 
     _paintAsPath: function () {
         const map = this.getMap();
-        const altitude = this._getPainter().getAltitude();
+        const altitude = this.getAltitude();
         // when map is tilting, draw the circle/ellipse as a polygon by vertexes.
         return altitude > 0 || map.getPitch() || ((this instanceof Ellipse) && map.getBearing());
     },
@@ -38,8 +60,8 @@ const el = {
         }
         const pcenter = this._getPrjCoordinates();
         const pt = map._prjToPoint(pcenter, map.getGLZoom());
-        const size = this._getRenderSize();
-        return [pt, size['width'], size['height']];
+        const size = this._getRenderSize(pt);
+        return [pt, ...size];
     },
 
     _paintOn: function () {
@@ -50,13 +72,13 @@ const el = {
         }
     },
 
-    _getRenderSize() {
+    _getRenderSize(pt) {
         const map = this.getMap(),
             z = map.getGLZoom();
         const prjExtent = this._getPrjExtent();
         const pmin = map._prjToPoint(prjExtent.getMin(), z),
             pmax = map._prjToPoint(prjExtent.getMax(), z);
-        return new Size(Math.abs(pmax.x - pmin.x) / 2, Math.abs(pmax.y - pmin.y) / 2);
+        return [Math.abs(pmax.x - pmin.x) / 2, Math.abs(pmax.y - pt.y), Math.abs(pt.y - pmin.y)];
     }
 };
 
@@ -77,7 +99,7 @@ Rectangle.include({
 });
 //----------------------------------------------------
 Sector.include(el, {
-    _redrawWhenPitch : () => true,
+    _redrawWhenPitch: () => true,
 
     _getPaintParams() {
         if (this._paintAsPath()) {
@@ -85,8 +107,8 @@ Sector.include(el, {
         }
         const map = this.getMap();
         const pt = map._prjToPoint(this._getPrjCoordinates(), map.getGLZoom());
-        const size = this._getRenderSize();
-        return [pt, size['width'],
+        const size = this._getRenderSize(pt);
+        return [pt, size[0],
             [this.getStartAngle(), this.getEndAngle()]
         ];
     },
@@ -120,6 +142,9 @@ LineString.include({
     },
 
     _getArrowShape(prePoint, point, lineWidth, arrowStyle, tolerance) {
+        if (!prePoint || !point || prePoint.equals(point)) {
+            return null;
+        }
         if (!tolerance) {
             tolerance = 0;
         }
@@ -154,13 +179,15 @@ LineString.include({
     },
 
     _paintOn(ctx, points, lineOpacity, fillOpacity, dasharray) {
-        if (this.options['smoothness']) {
-            Canvas.paintSmoothLine(ctx, points, lineOpacity, this.options['smoothness']);
-            this._paintArrow(ctx, points, lineOpacity);
+        const r = isWithinPixel(this._painter);
+        if (r.within) {
+            Canvas.pixelRect(ctx, r.center, lineOpacity, fillOpacity);
+        } else if (this.options['smoothness']) {
+            Canvas.paintSmoothLine(ctx, points, lineOpacity, this.options['smoothness'], false, this._animIdx, this._animTailRatio);
         } else {
             Canvas.path(ctx, points, lineOpacity, null, dasharray);
-            this._paintArrow(ctx, points, lineOpacity);
         }
+        this._paintArrow(ctx, points, lineOpacity);
     },
 
     _getArrowPlacement() {
@@ -189,10 +216,16 @@ LineString.include({
             last = map.coordToContainerPoint(this.getLastCoordinate());
         for (let i = segments.length - 1; i >= 0; i--) {
             if (placement === 'vertex-first' || placement === 'vertex-firstlast' && segments[i][0].closeTo(first, 0.01)) {
-                arrows.push(this._getArrowShape(segments[i][1], segments[i][0], lineWidth, arrowStyle, tolerance));
+                const arrow = this._getArrowShape(segments[i][1], segments[i][0], lineWidth, arrowStyle, tolerance);
+                if (arrow) {
+                    arrows.push(arrow);
+                }
             }
             if (placement === 'vertex-last' || placement === 'vertex-firstlast' && segments[i][segments[i].length - 1].closeTo(last, 0.01)) {
-                arrows.push(this._getArrowShape(segments[i][segments[i].length - 2], segments[i][segments[i].length - 1], lineWidth, arrowStyle, tolerance));
+                const arrow = this._getArrowShape(segments[i][segments[i].length - 2], segments[i][segments[i].length - 1], lineWidth, arrowStyle, tolerance);
+                if (arrow) {
+                    arrows.push(arrow);
+                }
             } else if (placement === 'point') {
                 this._getArrowPoints(arrows, segments[i], lineWidth, arrowStyle, tolerance);
             }
@@ -202,7 +235,10 @@ LineString.include({
 
     _getArrowPoints(arrows, segments, lineWidth, arrowStyle, tolerance) {
         for (let ii = 0, ll = segments.length - 1; ii < ll; ii++) {
-            arrows.push(this._getArrowShape(segments[ii], segments[ii + 1], lineWidth, arrowStyle, tolerance));
+            const arrow = this._getArrowShape(segments[ii], segments[ii + 1], lineWidth, arrowStyle, tolerance);
+            if (arrow) {
+                arrows.push(arrow);
+            }
         }
     },
 
@@ -242,6 +278,8 @@ Polygon.include({
         const prjHoles = this._getPrjHoles();
         const holePoints = [];
         if (prjHoles && prjHoles.length > 0) {
+            //outer ring  simplify result;
+            const simplified = this._simplified;
             for (let i = 0; i < prjHoles.length; i++) {
                 const hole = this._getPath2DPoints(prjHoles[i], disableSimplify, maxZoom);
                 if (Array.isArray(hole) && isSplitted) {
@@ -254,7 +292,10 @@ Polygon.include({
                 } else {
                     holePoints.push(hole);
                 }
-
+            }
+            // if outer ring  simplify==true , Ignore inner ring  simplify result
+            if (simplified) {
+                this._simplified = simplified;
             }
         }
         if (!isSplitted) {
@@ -265,7 +306,12 @@ Polygon.include({
     },
 
     _paintOn(ctx, points, lineOpacity, fillOpacity, dasharray) {
-        Canvas.polygon(ctx, points, lineOpacity, fillOpacity, dasharray, this.options['smoothness']);
+        const r = isWithinPixel(this._painter);
+        if (r.within) {
+            Canvas.pixelRect(ctx, r.center, lineOpacity, fillOpacity);
+        } else {
+            Canvas.polygon(ctx, points, lineOpacity, fillOpacity, dasharray, this.options['smoothness']);
+        }
     }
 });
 

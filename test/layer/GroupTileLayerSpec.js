@@ -7,7 +7,7 @@ describe('GroupTileLayer', function () {
     function createMap() {
         container = document.createElement('div');
         container.style.width = '30px';
-        container.style.height = '30px';
+        container.style.height = '150px';
         document.body.appendChild(container);
         var option = {
             zoom: 17,
@@ -110,7 +110,7 @@ describe('GroupTileLayer', function () {
         expect(tile2.listens('hide')).to.be.eql(0);
     });
 
-    it('json', function (done) {
+    it('json', function () {
         var group = new maptalks.GroupTileLayer('group', [
             new maptalks.TileLayer('tile1', {
                 urlTemplate : TILE_IMAGE
@@ -134,13 +134,10 @@ describe('GroupTileLayer', function () {
         expect(children[0].getId()).to.be.eql('tile1');
         expect(children[1].getId()).to.be.eql('tile2');
 
-        layer.once('layerload', function () {
-            var grid = layer.getTiles();
-            expect(grid.tileGrids[0].tiles.length).to.be.eql(1);
-            expect(grid.tileGrids[1].tiles.length).to.be.eql(1);
-            done();
-        });
         map.addLayer(layer);
+        var grid = layer.getTiles();
+        expect(grid.tileGrids[0].tiles.length).to.be.eql(1);
+        expect(grid.tileGrids[1].tiles.length).to.be.eql(1);
     });
 
     it('zoom isVisible', function (done) {

@@ -5,6 +5,7 @@ import Point from '../../../geo/Point';
 import PointExtent from '../../../geo/PointExtent';
 import Canvas from '../../../core/Canvas';
 import PointSymbolizer from './PointSymbolizer';
+const TEMP_SIZE = new Size(1, 1);
 
 export default class ImageMarkerSymbolizer extends PointSymbolizer {
 
@@ -64,10 +65,13 @@ export default class ImageMarkerSymbolizer extends PointSymbolizer {
             alpha = ctx.globalAlpha;
             ctx.globalAlpha *= style['markerOpacity'];
         }
-        const alignPoint = getAlignPoint(new Size(width, height), style['markerHorizontalAlignment'], style['markerVerticalAlignment']);
+        TEMP_SIZE.width = width;
+        TEMP_SIZE.height = height;
+        const alignPoint = getAlignPoint(TEMP_SIZE, style['markerHorizontalAlignment'], style['markerVerticalAlignment']);
         for (let i = 0, len = cookedPoints.length; i < len; i++) {
             let p = cookedPoints[i];
-            const origin = this._rotate(ctx, p, this._getRotationAt(i));
+            // const origin = this._rotate(ctx, p, this._getRotationAt(i));
+            const origin = this.getRotation() ? this._rotate(ctx, p, this._getRotationAt(i)) : null;
             if (origin) {
                 p = origin;
             }
@@ -110,12 +114,17 @@ export default class ImageMarkerSymbolizer extends PointSymbolizer {
     }
 
     getFixedExtent(resources) {
-        const url = this.style['markerFile'],
+        const style = this.style;
+        const url = style['markerFile'],
             img = resources ? resources.getImage(url) : null;
-        const width = this.style['markerWidth'] || (img ? img.width : 0),
-            height = this.style['markerHeight'] || (img ? img.height : 0);
+        const width = style['markerWidth'] || (img ? img.width : 0),
+            height = style['markerHeight'] || (img ? img.height : 0);
         const dxdy = this.getDxDy();
-        let result = new PointExtent(dxdy.add(-width / 2, 0), dxdy.add(width / 2, -height));
+        TEMP_SIZE.width = width;
+        TEMP_SIZE.height = height;
+        const alignPoint = getAlignPoint(TEMP_SIZE, style['markerHorizontalAlignment'], style['markerVerticalAlignment']);
+        let result = new PointExtent(dxdy.add(0, 0), dxdy.add(width, height));
+        result._add(alignPoint);
         const rotation = this.getRotation();
         if (rotation) {
             result = this._rotateExtent(result, rotation);
@@ -130,7 +139,7 @@ export default class ImageMarkerSymbolizer extends PointSymbolizer {
             'markerOpacity': getValueOrDefault(s['markerOpacity'], 1),
             'markerWidth': getValueOrDefault(s['markerWidth'], null),
             'markerHeight': getValueOrDefault(s['markerHeight'], null),
-            'markerRotation' : getValueOrDefault(s['markerRotation'], 0),
+            'markerRotation': getValueOrDefault(s['markerRotation'], 0),
 
             'markerDx': getValueOrDefault(s['markerDx'], 0),
             'markerDy': getValueOrDefault(s['markerDy'], 0),

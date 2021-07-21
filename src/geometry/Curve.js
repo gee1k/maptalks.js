@@ -13,6 +13,8 @@ const options = {
  * @extends LineString
  * @param {Coordinate[]|Number[][]} coordinates - coordinates of the line string
  * @param {Object} [options=null] - construct options defined in [LineString]{@link LineString#options}
+ * @property {Boolean} [options.enableSimplify=false] - whether to simplify path before rendering
+ * @property {Boolean} [options.enableClip=false] - whether to clip curve with map's current extent
  */
 class Curve extends LineString {
 
@@ -65,12 +67,18 @@ class Curve extends LineString {
         const l = segments.length;
         let i;
         for (i = step; i < l; i += step) {
-            arrows.push(this._getArrowShape(segments[i - 1], segments[i], lineWidth, arrowStyle, tolerance));
+            const arrow = this._getArrowShape(segments[i - 1], segments[i], lineWidth, arrowStyle, tolerance);
+            if (arrow) {
+                arrows.push(arrow);
+            }
         }
         i -= step;
         if (i < l - 1) {
             for (i += 1; i < l; i++) {
-                arrows.push(this._getArrowShape(segments[i - 1], segments[i], lineWidth, arrowStyle, tolerance));
+                const arrow = this._getArrowShape(segments[i - 1], segments[i], lineWidth, arrowStyle, tolerance);
+                if (arrow) {
+                    arrows.push(arrow);
+                }
             }
         }
     }

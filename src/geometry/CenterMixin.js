@@ -31,6 +31,8 @@ export default function (Base) {
             }
             this._coordinates = center;
             if (!this.getMap()) {
+                //When not on a layer or when creating a new one, temporarily save the coordinates,
+                this._dirtyCoords  = true;
                 this.onPositionChanged();
                 return this;
             }
@@ -54,11 +56,8 @@ export default function (Base) {
 
         _getPrjCoordinates() {
             const projection = this._getProjection();
-            if (!projection) {
-                return null;
-            }
             this._verifyProjection();
-            if (!this._pcenter) {
+            if (!this._pcenter && projection) {
                 if (this._coordinates) {
                     this._pcenter = projection.project(this._coordinates);
                 }

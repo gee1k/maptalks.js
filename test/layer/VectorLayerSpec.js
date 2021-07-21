@@ -127,7 +127,26 @@ describe('VectorLayer.Spec', function () {
                 map.zoomOut();
             });
             expect(function () {
-                layer.addGeometry(geometries, true);
+                layer.addGeometry(geometries);
+            }).to.not.throwException();
+        });
+
+        it('all type of geometry in seamlessZoom', function (done) {
+            map.config('seamlessZoom', true);
+            layer.on('forceRenderOnZooming', true);
+            layer.on('drawImmediate', true);
+            var geometries = GEN_GEOMETRIES_OF_ALL_TYPES();
+            map.on('zoomend', function () {
+                done();
+            });
+            var count = 0;
+            layer.on('layerload', function () {
+                count++;
+                map.zoomOut();
+
+            });
+            expect(function () {
+                layer.addGeometry(geometries);
             }).to.not.throwException();
         });
 
@@ -237,8 +256,11 @@ describe('VectorLayer.Spec', function () {
                     maptalks.Browser.retina = false;
                     expect(sx).to.be.eql(2);
                     expect(sy).to.be.eql(2);
+                    maptalks.Browser.devicePixelRatio = 1;
+                    maptalks.Browser.retina = false;
                     done();
                 });
+                maptalks.Browser.devicePixelRatio = 2;
                 maptalks.Browser.retina = true;
                 container.style.width = (parseInt(container.style.width) - 1) + 'px';
             });
@@ -422,6 +444,43 @@ describe('VectorLayer.Spec', function () {
                 done();
             });
             map.setPitch(80);
+        });
+
+
+        it('sort markers by camera distance', function (done) {
+            var canvas = document.createElement('canvas');
+            var marker1 = new maptalks.Marker(map.getCenter(), {
+                symbol : {
+                    'markerType': 'ellipse',
+                    'markerFill': '#f00',
+                    'markerWidth' : 20,
+                    'markerHeight' : 20
+                },
+                properties: {
+                    altitude: 2
+                }
+
+            });
+            var marker2 = new maptalks.Marker(map.getCenter(), {
+                symbol : {
+                    'markerType': 'ellipse',
+                    'markerFill': '#0f0',
+                    'markerWidth' : 20,
+                    'markerHeight' : 20
+                },
+                properties: {
+                    altitude: 0
+                }
+            });
+            var layer = new maptalks.VectorLayer('v', [marker1, marker2], { 'canvas' : canvas, enableAltitude: true, sortByDistanceToCamera:true });
+            layer.once('layerload', function () {
+                expect(layer).to.be.painted(0, 0);
+                var w = canvas.width, h = canvas.height;
+                var color = canvas.getContext('2d').getImageData(w / 2, h / 2, 1, 1).data;
+                expect(color).to.be.eql({ 0: 255, 1: 0, 2: 0, 3: 255 });
+                done();
+            });
+            layer.addTo(map);
         });
     });
 

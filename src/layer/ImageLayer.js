@@ -1,5 +1,6 @@
 import { extend } from '../core/util';
 import Browser from '../core/Browser';
+import Point from '../geo/Point';
 import ImageGLRenderable from '../renderer/layer/ImageGLRenderable';
 import CanvasRenderer from '../renderer/layer/CanvasRenderer';
 import { ResourceCache } from '../renderer/layer/CanvasRenderer';
@@ -17,6 +18,8 @@ const options = {
     renderer: Browser.webgl ? 'gl' : 'canvas',
     crossOrigin: null
 };
+
+const TEMP_POINT = new Point(0, 0);
 
 /**
  * @classdesc
@@ -36,12 +39,16 @@ const options = {
 class ImageLayer extends Layer {
 
     constructor(id, images, options) {
-        if (!Array.isArray(images) && !images.url) {
+        if (images && !Array.isArray(images) && !images.url) {
             options = images;
             images = null;
         }
         super(id, options);
-        this._prepareImages(images);
+        this._images = images;
+    }
+
+    onAdd() {
+        this._prepareImages(this._images);
     }
 
     /**
@@ -68,9 +75,12 @@ class ImageLayer extends Layer {
         if (!Array.isArray(images)) {
             images = [images];
         }
+        const map = this.getMap();
         this._imageData = images.map(img => {
+            const extent = new Extent(img.extent);
             return extend({}, img, {
-                extent : new Extent(img.extent),
+                extent: extent,
+                extent2d: extent.convertTo(c => map.coordToPoint(c, map.getGLZoom()))
             });
         });
         this._images = images;
@@ -134,15 +144,6 @@ export class ImageLayerCanvasRenderer extends CanvasRenderer {
         this.setToRedraw();
     }
 
-    needToRedraw() {
-        const map = this.getMap();
-        // don't redraw when map is zooming without pitch and layer doesn't have any point symbolizer.
-        if (map.isZooming() && !map.getPitch()) {
-            return false;
-        }
-        return super.needToRedraw();
-    }
-
     draw() {
         if (!this.isDrawable()) {
             return;
@@ -156,10 +157,10 @@ export class ImageLayerCanvasRenderer extends CanvasRenderer {
     _drawImages() {
         const imgData = this.layer._imageData;
         const map = this.getMap();
-        const mapExtent = map.getExtent();
+        const mapExtent = map._get2DExtent(map.getGLZoom());
         if (imgData && imgData.length) {
             for (let i = 0; i < imgData.length; i++) {
-                const extent = imgData[i].extent;
+                const extent = imgData[i].extent2d;
                 const image = this.resources && this.resources.getImage(imgData[i].url);
                 if (image && mapExtent.intersects(extent)) {
                     this._painted = true;
@@ -177,9 +178,8 @@ export class ImageLayerCanvasRenderer extends CanvasRenderer {
             ctx.globalAlpha = opacity;
         }
         const map = this.getMap();
-        const min = map.coordToPoint(extent.getMin()),
-            max = map.coordToPoint(extent.getMax());
-        const point = map._pointToContainerPoint(min);
+        const nw = TEMP_POINT.set(extent.xmin, extent.ymax);
+        const point = map._pointToContainerPoint(nw, map.getGLZoom());
         let x = point.x, y = point.y;
         const bearing = map.getBearing();
         if (bearing) {
@@ -190,7 +190,8 @@ export class ImageLayerCanvasRenderer extends CanvasRenderer {
             }
             x = y = 0;
         }
-        ctx.drawImage(image, x, y, max.x - min.x, max.y - min.y);
+        const scale = map.getGLScale();
+        ctx.drawImage(image, x, y, extent.getWidth() / scale, extent.getHeight() / scale);
         if (bearing) {
             ctx.restore();
         }
@@ -212,12 +213,7 @@ export class ImageLayerGLRenderer extends ImageGLRenderable(ImageLayerCanvasRend
     }
 
     _drawImage(image, extent, opacity) {
-        const map = this.getMap();
-        let extent2d = extent.__imagelayerposition;
-        if (!extent2d) {
-            extent2d = extent.__imagelayerposition = extent.convertTo(c => map.coordToPoint(c, map.getGLZoom()));
-        }
-        this.drawGLImage(image, extent2d.xmin, extent2d.ymin, extent2d.getWidth(), extent2d.getHeight(), opacity);
+        this.drawGLImage(image, extent.xmin, extent.ymax, extent.getWidth(), extent.getHeight(), 1, opacity);
     }
 
     createContext() {

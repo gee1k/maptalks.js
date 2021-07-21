@@ -50,6 +50,29 @@ describe('Map.Anim', function () {
         });
     });
 
+    it('flyTo', function (done) {
+        var center = map.getCenter().add(0.1, 0.1);
+        var zoom = map.getZoom() - 1;
+        var pitch = map.getPitch() + 10;
+        var bearing = map.getBearing() + 60;
+        map.getBaseLayer().config('durationToAnimate', 300);
+        map.on('animateend', function () {
+            expect(map.getCenter().toArray()).to.be.closeTo(center.toArray());
+            expect(map.getZoom()).to.be.eql(zoom);
+            expect(map.getPitch()).to.be.eql(pitch);
+            expect(map.getBearing()).to.be.approx(bearing);
+            done();
+        });
+        map.flyTo({
+            center : center,
+            zoom : zoom,
+            pitch : pitch,
+            bearing : bearing
+        }, {
+            'duration' : 300
+        });
+    });
+
     it('rotate', function (done) {
         var pitch = map.getPitch() + 10;
         var bearing = map.getBearing() + 60;
@@ -97,30 +120,30 @@ describe('Map.Anim', function () {
         });
     });
 
-    it('interupt animateTo by setCenter', function (done) {
-        var center = map.getCenter().add(0.1, 0.1);
-        var zoom = map.getZoom() - 4;
-        var pitch = map.getPitch() + 10;
-        var bearing = map.getBearing() + 60;
-        map.on('animateinterupted', function () {
-            expect(map.getCenter().toArray()).not.to.be.closeTo(center.toArray());
-            expect(map.getZoom()).not.to.be.eql(zoom);
-            expect(map.getPitch()).not.to.be.eql(pitch);
-            expect(map.getBearing()).not.to.be.eql(bearing);
-            done();
-        });
-        map.animateTo({
-            center : center,
-            zoom : zoom,
-            pitch : pitch,
-            bearing : bearing
-        }, {
-            'duration' : 200
-        });
-        setTimeout(function () {
-            map.setCenter(map.getCenter().add(-0.1, 0));
-        }, 100);
-    });
+    // it('interrupt animateTo by _stopAnim', function (done) {
+    //     var center = map.getCenter().add(0.1, 0.1);
+    //     var zoom = map.getZoom() - 4;
+    //     // var pitch = map.getPitch() + 10;
+    //     var bearing = map.getBearing() + 60;
+    //     map.on('animateinterrupted', function () {
+    //         expect(map.getCenter().toArray()).not.to.be.closeTo(center.toArray());
+    //         expect(map.getZoom()).not.to.be.eql(zoom);
+    //         expect(map.getPitch()).not.to.be.eql(pitch);
+    //         expect(map.getBearing()).not.to.be.eql(bearing);
+    //         done();
+    //     });
+    //     var player = map.animateTo({
+    //         center : center,
+    //         zoom : zoom,
+    //         // pitch : pitch,
+    //         bearing : bearing
+    //     }, {
+    //         'duration' : 200
+    //     });
+    //     setTimeout(function () {
+    //         map._stopAnim(player);
+    //     }, 100);
+    // });
 
     it('interupt animateTo by scrollZoom', function (done) {
         map.config('zoomAnimationDuration', 100);
@@ -144,7 +167,7 @@ describe('Map.Anim', function () {
         });
         setTimeout(function () {
             happen.once(container, {
-                type: (maptalks.Browser.gecko ? 'DOMMouseScroll' : 'mousewheel'),
+                type: 'wheel',
                 detail: 100
             });
         }, 100);

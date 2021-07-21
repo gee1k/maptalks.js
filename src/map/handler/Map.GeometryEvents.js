@@ -1,4 +1,4 @@
-import { now, requestAnimFrame, cancelAnimFrame } from '../../core/util';
+import { now } from '../../core/util';
 import { on, off, getEventContainerPoint, preventDefault, stopPropagation } from '../../core/util/dom';
 import Handler from '../../handler/Handler';
 import Geometry from '../../geometry/Geometry';
@@ -113,39 +113,39 @@ const EVENTS =
      * @property {Event} domEvent                 - dom event
      */
     'touchend';
-    /**
-     * mouseenter event for geometry
-     * @event Geometry#mouseenter
-     * @type {Object}
-     * @property {String} type                    - mouseenter
-     * @property {Geometry} target       - the geometry fires mouseenter
-     * @property {Coordinate} coordinate - coordinate of the event
-     * @property {Point} containerPoint  - container point of the event
-     * @property {Point} viewPoint       - view point of the event
-     * @property {Event} domEvent                 - dom event
-     */
-    /**
-     * mouseover event for geometry
-     * @event Geometry#mouseover
-     * @type {Object}
-     * @property {String} type                    - mouseover
-     * @property {Geometry} target       - the geometry fires mouseover
-     * @property {Coordinate} coordinate - coordinate of the event
-     * @property {Point} containerPoint  - container point of the event
-     * @property {Point} viewPoint       - view point of the event
-     * @property {Event} domEvent                 - dom event
-     */
-    /**
-     * mouseout event for geometry
-     * @event Geometry#mouseout
-     * @type {Object}
-     * @property {String} type                    - mouseout
-     * @property {Geometry} target       - the geometry fires mouseout
-     * @property {Coordinate} coordinate - coordinate of the event
-     * @property {Point} containerPoint  - container point of the event
-     * @property {Point} viewPoint       - view point of the event
-     * @property {Event} domEvent                 - dom event
-     */
+/**
+ * mouseenter event for geometry
+ * @event Geometry#mouseenter
+ * @type {Object}
+ * @property {String} type                    - mouseenter
+ * @property {Geometry} target       - the geometry fires mouseenter
+ * @property {Coordinate} coordinate - coordinate of the event
+ * @property {Point} containerPoint  - container point of the event
+ * @property {Point} viewPoint       - view point of the event
+ * @property {Event} domEvent                 - dom event
+ */
+/**
+ * mouseover event for geometry
+ * @event Geometry#mouseover
+ * @type {Object}
+ * @property {String} type                    - mouseover
+ * @property {Geometry} target       - the geometry fires mouseover
+ * @property {Coordinate} coordinate - coordinate of the event
+ * @property {Point} containerPoint  - container point of the event
+ * @property {Point} viewPoint       - view point of the event
+ * @property {Event} domEvent                 - dom event
+ */
+/**
+ * mouseout event for geometry
+ * @event Geometry#mouseout
+ * @type {Object}
+ * @property {String} type                    - mouseout
+ * @property {Geometry} target       - the geometry fires mouseout
+ * @property {Coordinate} coordinate - coordinate of the event
+ * @property {Point} containerPoint  - container point of the event
+ * @property {Point} viewPoint       - view point of the event
+ * @property {Event} domEvent                 - dom event
+ */
 
 class MapGeometryEventsHandler extends Handler {
 
@@ -178,7 +178,7 @@ class MapGeometryEventsHandler extends Handler {
         let oneMoreEvent = null;
         const eventType = type || domEvent.type;
         // ignore click lasted for more than 300ms.
-        if (eventType === 'mousedown' || (eventType === 'touchstart' && domEvent.touches.length === 1)) {
+        if (eventType === 'mousedown' || (eventType === 'touchstart' && domEvent.touches && domEvent.touches.length === 1)) {
             this._mouseDownTime = now();
         } else if ((eventType === 'click' || eventType === 'touchend') && this._mouseDownTime) {
             const downTime = this._mouseDownTime;
@@ -200,8 +200,7 @@ class MapGeometryEventsHandler extends Handler {
         if (!actual) {
             return;
         }
-        const containerPoint = getEventContainerPoint(actual, map._containerDOM),
-            coordinate = map.containerPointToCoordinate(containerPoint);
+        const containerPoint = getEventContainerPoint(actual, map._containerDOM);
         if (eventType === 'touchstart') {
             preventDefault(domEvent);
         }
@@ -228,24 +227,21 @@ class MapGeometryEventsHandler extends Handler {
                 return true;
             },
             'count': 1,
-            'coordinate': coordinate,
-            'onlyVisible' : map.options['onlyVisibleGeometryEvents'],
+            'containerPoint': containerPoint,
+            'onlyVisible': map.options['onlyVisibleGeometryEvents'],
             'layers': layers
         };
         const callback = fireGeometryEvent.bind(this);
 
-        if (this._queryIdentifyTimeout) {
-            cancelAnimFrame(this._queryIdentifyTimeout);
-        }
         if (eventType === 'mousemove' || eventType === 'touchmove') {
-            this._queryIdentifyTimeout = requestAnimFrame(() => {
+            this._queryIdentifyTimeout = map.getRenderer().callInNextFrame(() => {
                 if (map.isInteracting()) {
                     return;
                 }
-                map.identify(identifyOptions, callback);
+                map.identifyAtPoint(identifyOptions, callback);
             });
         } else {
-            map.identify(identifyOptions, callback);
+            map.identifyAtPoint(identifyOptions, callback);
         }
 
         function fireGeometryEvent(geometries) {
@@ -272,8 +268,8 @@ class MapGeometryEventsHandler extends Handler {
 
                 const oldTargets = this._prevOverGeos && this._prevOverGeos.geos;
                 this._prevOverGeos = {
-                    'geos' : geometries,
-                    'geomap' : geoMap
+                    'geos': geometries,
+                    'geomap': geoMap
                 };
                 if (oldTargets && oldTargets.length > 0) {
                     for (let i = oldTargets.length - 1; i >= 0; i--) {
@@ -314,7 +310,7 @@ class MapGeometryEventsHandler extends Handler {
 
 Map.mergeOptions({
     'geometryEvents': true,
-    'onlyVisibleGeometryEvents' : true
+    'onlyVisibleGeometryEvents': true
 });
 
 Map.addOnLoadHook('addHandler', 'geometryEvents', MapGeometryEventsHandler);

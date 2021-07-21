@@ -5,13 +5,13 @@ import {
     isString,
     isArrayHasData,
     isSVG,
-    isCssUrl,
     extractCssUrl,
     computeDegree
 } from './util';
 import { isGradient } from './util/style';
 import { createEl } from './util/dom';
 import Browser from './Browser';
+import Point from '../geo/Point';
 import { getFont, getAlignPoint } from './util/strings';
 
 const DEFAULT_STROKE_COLOR = '#000';
@@ -19,6 +19,11 @@ const DEFAULT_FILL_COLOR = 'rgba(255,255,255,0)';
 const DEFAULT_TEXT_COLOR = '#000';
 
 let hitTesting = false;
+
+let TEMP_CANVAS = null;
+
+const RADIAN = Math.PI / 180;
+const textOffsetY = 1;
 
 const Canvas = {
     setHitTesting(testing) {
@@ -63,15 +68,16 @@ const Canvas = {
         if (!isNil(strokeWidth) && ctx.lineWidth !== strokeWidth) {
             ctx.lineWidth = strokeWidth;
         }
-        const strokeColor = style['linePatternFile'] || style['lineColor'] || DEFAULT_STROKE_COLOR;
+        const strokePattern = style['linePatternFile'];
+        const strokeColor = style['lineColor'] || DEFAULT_STROKE_COLOR;
         if (testing) {
             ctx.strokeStyle = '#000';
-        } else if (isImageUrl(strokeColor) && resources) {
+        } else if (strokePattern && resources) {
             let patternOffset;
             if (style['linePatternDx'] || style['linePatternDy']) {
                 patternOffset = [style['linePatternDx'], style['linePatternDy']];
             }
-            Canvas._setStrokePattern(ctx, strokeColor, strokeWidth, patternOffset, resources);
+            Canvas._setStrokePattern(ctx, strokePattern, strokeWidth, patternOffset, resources);
             //line pattern will override stroke-dasharray
             style['lineDasharray'] = [];
         } else if (isGradient(strokeColor)) {
@@ -92,11 +98,12 @@ const Canvas = {
         if (ctx.setLineDash && isArrayHasData(style['lineDasharray'])) {
             ctx.setLineDash(style['lineDasharray']);
         }
-        const fill = style['polygonPatternFile'] || style['polygonFill'] || DEFAULT_FILL_COLOR;
+        const polygonPattern = style['polygonPatternFile'];
+        const fill = style['polygonFill'] || DEFAULT_FILL_COLOR;
         if (testing) {
             ctx.fillStyle = '#000';
-        } else if (isImageUrl(fill) && resources) {
-            const fillImgUrl = extractImageUrl(fill);
+        } else if (polygonPattern && resources) {
+            const fillImgUrl = extractImageUrl(polygonPattern);
             let fillTexture = resources.getImage([fillImgUrl, null, null]);
             if (!fillTexture) {
                 //if the linestring has a arrow and a linePatternFile, polygonPatternFile will be set with the linePatternFile.
@@ -311,26 +318,29 @@ const Canvas = {
         }
     },
 
-    _textOnLine(ctx, text, pt, textHaloRadius, textHaloFill, textHaloOp) {
+    _textOnLine(ctx, text, pt, textHaloRadius, textHaloFill, textHaloAlpha) {
         if (hitTesting) {
-            textHaloOp = 1;
+            textHaloAlpha = 1;
         }
+        const drawHalo = textHaloAlpha !== 0 && textHaloRadius !== 0;
         // pt = pt._round();
         ctx.textBaseline = 'top';
         let gco, fill;
-        if (textHaloOp !== 0 && textHaloRadius !== 0) {
+        const shadowBlur = ctx.shadowBlur,
+            shadowOffsetX = ctx.shadowOffsetX,
+            shadowOffsetY = ctx.shadowOffsetY;
+        if (drawHalo) {
             const alpha = ctx.globalAlpha;
             //http://stackoverflow.com/questions/14126298/create-text-outline-on-canvas-in-javascript
             //根据text-horizontal-alignment和text-vertical-alignment计算绘制起始点偏移量
-            ctx.globalAlpha *= textHaloOp;
+            ctx.globalAlpha *= textHaloAlpha;
 
             ctx.miterLimit = 2;
             ctx.lineJoin = 'round';
             ctx.lineCap = 'round';
             ctx.lineWidth = textHaloRadius * 2;
             ctx.strokeStyle = textHaloFill;
-            ctx.strokeText(text, Math.round(pt.x), Math.round(pt.y));
-            // ctx.lineWidth = 1;
+            ctx.strokeText(text, pt.x, pt.y + textOffsetY);
             ctx.miterLimit = 10; //default
 
             ctx.globalAlpha = alpha;
@@ -340,26 +350,28 @@ const Canvas = {
             fill = ctx.fillStyle;
             ctx.fillStyle = '#000';
         }
+
+        if (shadowBlur && drawHalo) {
+            ctx.shadowBlur = ctx.shadowOffsetX = ctx.shadowOffsetY = 0;
+        }
         Canvas.fillText(ctx, text, pt);
         if (gco) {
-            const shadow = ctx.shadowBlur;
-            if (shadow) {
-                ctx.shadowBlur = 0;
-            }
             ctx.globalCompositeOperation = gco;
             Canvas.fillText(ctx, text, pt, fill);
-            if (shadow) {
-                ctx.shadowBlur = shadow;
+            if (shadowBlur) {
+                ctx.shadowBlur = shadowBlur;
+                ctx.shadowOffsetX = shadowOffsetX;
+                ctx.shadowOffsetY = shadowOffsetY;
             }
         }
     },
 
-    fillText(ctx, text, point, rgba) {
+    fillText(ctx, text, pt, rgba) {
         ctx.canvas._drawn = true;
         if (rgba) {
             ctx.fillStyle = rgba;
         }
-        ctx.fillText(text, Math.round(point.x), Math.round(point.y));
+        ctx.fillText(text, pt.x, pt.y + textOffsetY);
     },
 
     _stroke(ctx, strokeOpacity, x, y) {
@@ -408,7 +420,13 @@ const Canvas = {
         function fillWithPattern(p1, p2) {
             const degree = computeDegree(p1.x, p1.y, p2.x, p2.y);
             ctx.save();
-            ctx.translate(p1.x, p1.y - ctx.lineWidth / 2 / Math.cos(degree));
+            const cosd = Math.cos(degree);
+            if (Math.abs(cosd) < 1E-7) {
+                //a vertical line
+                ctx.translate(p1.x - ctx.lineWidth / 2, p1.y);
+            } else {
+                ctx.translate(p1.x, p1.y - ctx.lineWidth / 2 / cosd);
+            }
             ctx.rotate(degree);
             Canvas._stroke(ctx, lineOpacity);
             ctx.restore();
@@ -447,18 +465,55 @@ const Canvas = {
         Canvas._stroke(ctx, lineOpacity);
     },
 
+    _multiClip(ctx, points) {
+        if (!points || points.length === 0) return;
+        //not Handle holes
+        points = points[0];
+        for (let i = 0, len = points.length; i < len; i++) {
+            const point = points[i];
+            let x = point.x, y = point.y;
+            if (i === 0) {
+                ctx.moveTo(x, y);
+            } else {
+                ctx.lineTo(x, y);
+            }
+            if (i === len - 1) {
+                x = points[0].x;
+                y = points[0].y;
+                ctx.lineTo(x, y);
+            }
+        }
+    },
+
     polygon(ctx, points, lineOpacity, fillOpacity, lineDashArray, smoothness) {
+        // if MultiClip
+        if (ctx.isMultiClip) {
+            Canvas._multiClip(ctx, points);
+            return;
+        }
         if (!isArrayHasData(points)) {
             return;
         }
-        function fillPolygon(points, i, op) {
-            Canvas.fillCanvas(ctx, op, points[i][0].x, points[i][0].y);
-        }
+
         const isPatternLine = Canvas._isPattern(ctx.strokeStyle),
             fillFirst = (isArrayHasData(lineDashArray) && !ctx.setLineDash) || isPatternLine && !smoothness;
         if (!isArrayHasData(points[0])) {
             points = [points];
         }
+        const savedCtx = ctx;
+        if (points.length > 1 && !IS_NODE) {
+            if (!TEMP_CANVAS) {
+                TEMP_CANVAS = Canvas.createCanvas(1, 1);
+            }
+            ctx.canvas._drawn = false;
+            TEMP_CANVAS.width = ctx.canvas.width;
+            TEMP_CANVAS.height = ctx.canvas.height;
+            ctx = TEMP_CANVAS.getContext('2d');
+            copyProperties(ctx, savedCtx);
+        }
+        // function fillPolygon(points, i, op) {
+        //     Canvas.fillCanvas(ctx, op, points[i][0].x, points[i][0].y);
+        // }
         let op, i, len;
         if (fillFirst) {
             //因为canvas只填充moveto,lineto,lineto的空间, 而dashline的moveto不再构成封闭空间, 所以重新绘制图形轮廓用于填充
@@ -473,7 +528,7 @@ const Canvas = {
                     ctx.globalCompositeOperation = 'destination-out';
                     op = 1;
                 }
-                fillPolygon(points, i, op);
+                Canvas.fillCanvas(ctx, op, points[i][0].x, points[i][0].y);
                 if (i > 0) {
                     ctx.globalCompositeOperation = 'source-over';
                 } else if (len > 1) {
@@ -502,7 +557,7 @@ const Canvas = {
                     ctx.globalCompositeOperation = 'destination-out';
                     op = 1;
                 }
-                fillPolygon(points, i, op);
+                Canvas.fillCanvas(ctx, op, points[i][0].x, points[i][0].y);
                 if (i > 0) {
                     //return to default compositeOperation to display strokes.
                     ctx.globalCompositeOperation = 'source-over';
@@ -513,7 +568,11 @@ const Canvas = {
             }
             Canvas._stroke(ctx, lineOpacity);
         }
-
+        if (points.length > 1 && !IS_NODE) {
+            savedCtx.drawImage(TEMP_CANVAS, 0, 0);
+            savedCtx.canvas._drawn = ctx.canvas._drawn;
+            copyProperties(savedCtx, ctx);
+        }
     },
 
     _ring(ctx, ring, lineDashArray, lineOpacity, ignorePattern) {
@@ -529,56 +588,7 @@ const Canvas = {
         }
     },
 
-    // paintSmoothLine(ctx, points, lineOpacity, smoothValue, close) {
-    //     if (!points || points.length <= 2) {
-    //         return;
-    //     }
-    //     function getQuadControlPoint(x0, y0, x1, y1, smoothValue) {
-    //         const dist = Math.sqrt(Math.pow(x0 - x1, 2) + Math.pow(y0 - y1, 2));
-    //         const perpDist = dist * smoothValue;
-    //         const midx = (x0 + x1) / 2, midy = (y0 + y1) / 2;
-    //         const degree = Math.PI / 2 - computeDegree(x0, y0, x1, y1);
-    //         const dx = Math.cos(degree) * perpDist, dy = Math.sin(degree) * perpDist;
-    //         return [midx - dx, midy + dy];
-    //     }
-    //     ctx.beginPath();
-    //     ctx.moveTo(points[0].x, points[0].y);
-    //     if (points.length <= 2 || !smoothValue) {
-    //         Canvas._path(ctx, points);
-    //         return;
-    //     }
-    //     const l = close ? points.length + 1 : points.length;
-    //     let prevCtrlPoint;
-    //     for (let i = 1; i < l; i++) {
-    //         const prevPoint = points[i - 1];
-    //         const currentPoint = i === points.length ? points[0] : points[i];
-    //         let ctrlPoint;
-    //         if (i === 1) {
-    //             // the first control point
-    //             ctrlPoint = getQuadControlPoint(prevPoint.x, prevPoint.y, points[i].x, points[i].y, smoothValue);
-    //         } else {
-    //             // the following control point
-    //             const x = 2 * prevPoint.x - prevCtrlPoint[0], y = 2 * prevPoint.y - prevCtrlPoint[1];
-    //             ctrlPoint = [x, y];
-    //         }
-    //         if (i < points.length) {
-    //             ctx.quadraticCurveTo(ctrlPoint[0], ctrlPoint[1], currentPoint.x, currentPoint.y);
-    //             prevPoint.nextCtrlPoint = ctrlPoint;
-    //             currentPoint.prevCtrlPoint = ctrlPoint;
-    //             prevCtrlPoint = ctrlPoint;
-    //         } else {
-    //             //the closing curve, draw a bezierCurve
-    //             //the second control point, the opposite one of the first vertex's next control point
-    //             const x1 = 2 * currentPoint.x - currentPoint.nextCtrlPoint[0], y1 = 2 * currentPoint.y - currentPoint.nextCtrlPoint[1];
-    //             ctx.bezierCurveTo(ctrlPoint[0], ctrlPoint[1], x1, y1, currentPoint.x, currentPoint.y);
-    //         }
-
-    //     }
-    //     // points[points.length - 1].prevCtrlPoint = prevCtrlPoint;
-    //     Canvas._stroke(ctx, lineOpacity);
-    // },
-
-    paintSmoothLine(ctx, points, lineOpacity, smoothValue, close) {
+    paintSmoothLine(ctx, points, lineOpacity, smoothValue, close, tailIdx, tailRatio) {
         if (!points) {
             return;
         }
@@ -586,8 +596,44 @@ const Canvas = {
             Canvas.path(ctx, points, lineOpacity);
             return;
         }
+
+        //推算 cubic 贝塞尔曲线片段的起终点和控制点坐标
+        //t0: 片段起始比例 0-1
+        //t1: 片段结束比例 0-1
+        //x1, y1, 曲线起点
+        //bx1, by1, bx2, by2，曲线控制点
+        //x2, y2  曲线终点
+        //结果是曲线片段的起点，2个控制点坐标和终点坐标
+        //https://stackoverflow.com/questions/878862/drawing-part-of-a-b%C3%A9zier-curve-by-reusing-a-basic-b%C3%A9zier-curve-function/879213#879213
+        function interpolate(t0, t1, x1, y1, bx1, by1, bx2, by2, x2, y2) {
+            const u0 = 1.0 - t0;
+            const u1 = 1.0 - t1;
+
+            const qxa = x1 * u0 * u0 + bx1 * 2 * t0 * u0 + bx2 * t0 * t0;
+            const qxb = x1 * u1 * u1 + bx1 * 2 * t1 * u1 + bx2 * t1 * t1;
+            const qxc = bx1 * u0 * u0 + bx2 * 2 * t0 * u0 + x2 * t0 * t0;
+            const qxd = bx1 * u1 * u1 + bx2 * 2 * t1 * u1 + x2 * t1 * t1;
+
+            const qya = y1 * u0 * u0 + by1 * 2 * t0 * u0 + by2 * t0 * t0;
+            const qyb = y1 * u1 * u1 + by1 * 2 * t1 * u1 + by2 * t1 * t1;
+            const qyc = by1 * u0 * u0 + by2 * 2 * t0 * u0 + y2 * t0 * t0;
+            const qyd = by1 * u1 * u1 + by2 * 2 * t1 * u1 + y2 * t1 * t1;
+
+            // const xa = qxa * u0 + qxc * t0;
+            const xb = qxa * u1 + qxc * t1;
+            const xc = qxb * u0 + qxd * t0;
+            const xd = qxb * u1 + qxd * t1;
+
+            // const ya = qya * u0 + qyc * t0;
+            const yb = qya * u1 + qyc * t1;
+            const yc = qyb * u0 + qyd * t0;
+            const yd = qyb * u1 + qyd * t1;
+
+            return [xb, yb, xc, yc, xd, yd];
+        }
+
         //from http://www.antigrain.com/research/bezier_interpolation/
-        function getCubicControlPoints(x0, y0, x1, y1, x2, y2, x3, y3, smoothValue) {
+        function getCubicControlPoints(x0, y0, x1, y1, x2, y2, x3, y3, smoothValue, t) {
             // Assume we need to calculate the control
             // points between (x1,y1) and (x2,y2).
             // Then x0,y0 - the previous vertex,
@@ -615,13 +661,19 @@ const Canvas = {
                 ctrl2X = xm2 + (xc2 - xm2) * smoothValue + x2 - xm2,
                 ctrl2Y = ym2 + (yc2 - ym2) * smoothValue + y2 - ym2;
 
-            return [ctrl1X, ctrl1Y, ctrl2X, ctrl2Y];
+            const ctrlPoints = [ctrl1X, ctrl1Y, ctrl2X, ctrl2Y];
+            if (t < 1) {
+                return interpolate(0, t, x1, y1, ctrl1X, ctrl1Y, ctrl2X, ctrl2Y, x2, y2);
+            } else {
+                return ctrlPoints;
+            }
         }
-        const count = points.length;
-        const l = close ? count : count - 1;
+        let count = points.length;
+        let l = close ? count : count - 1;
 
         ctx.beginPath();
         ctx.moveTo(points[0].x, points[0].y);
+        if (tailRatio !== undefined) l -= Math.max(l - tailIdx - 1, 0);
         let preCtrlPoints;
         for (let i = 0; i < l; i++) {
             const x1 = points[i].x, y1 = points[i].y;
@@ -657,17 +709,28 @@ const Canvas = {
                 y3 = points[i + 2 - count].y;
             }
 
-            const ctrlPoints = getCubicControlPoints(x0, y0, x1, y1, x2, y2, x3, y3, smoothValue);
-            ctx.bezierCurveTo(ctrlPoints[0], ctrlPoints[1], ctrlPoints[2], ctrlPoints[3], x2, y2);
+            const ctrlPoints = getCubicControlPoints(x0, y0, x1, y1, x2, y2, x3, y3, smoothValue, i === l - 1 ? tailRatio : 1);
+            if (i === l - 1 && tailRatio >= 0 && tailRatio < 1) {
+                ctx.bezierCurveTo(ctrlPoints[0], ctrlPoints[1], ctrlPoints[2], ctrlPoints[3], ctrlPoints[4], ctrlPoints[5]);
+                points.splice(l - 1, count - (l - 1) - 1);
+                const lastPoint = new Point(ctrlPoints[4], ctrlPoints[5]);
+                lastPoint.prevCtrlPoint = new Point(ctrlPoints[2], ctrlPoints[3]);
+                points.push(lastPoint);
+                count = points.length;
+            } else {
+                ctx.bezierCurveTo(ctrlPoints[0], ctrlPoints[1], ctrlPoints[2], ctrlPoints[3], x2, y2);
+            }
             points[i].nextCtrlPoint = ctrlPoints.slice(0, 2);
             points[i].prevCtrlPoint = preCtrlPoints ? preCtrlPoints.slice(2) : null;
             preCtrlPoints = ctrlPoints;
         }
-        if (!close) {
+        if (!close && points[1].prevCtrlPoint) {
             points[0].nextCtrlPoint = points[1].prevCtrlPoint;
             delete points[0].prevCtrlPoint;
         }
-        points[count - 1].prevCtrlPoint = points[count - 2].nextCtrlPoint;
+        if (!points[count - 1].prevCtrlPoint) {
+            points[count - 1].prevCtrlPoint = points[count - 2].nextCtrlPoint;
+        }
         Canvas._stroke(ctx, lineOpacity);
     },
 
@@ -689,7 +752,7 @@ const Canvas = {
             p1p2 = Math.PI - p1p2;
         }
         //angle between circle center and p2
-        const cp2 = 90 * Math.PI / 180 - a / 2,
+        const cp2 = 90 * RADIAN - a / 2,
             da = p1p2 - cp2;
 
         const dx = Math.cos(da) * r,
@@ -729,41 +792,49 @@ const Canvas = {
 
 
     //各种图形的绘制方法
-    ellipse(ctx, pt, width, height, lineOpacity, fillOpacity) {
-        function bezierEllipse(x, y, a, b) {
+    ellipse(ctx, pt, width, heightTop, heightBottom, lineOpacity, fillOpacity) {
+        function bezierEllipse(x, y, a, b, b1) {
             const k = 0.5522848,
                 ox = a * k,
-                oy = b * k;
+                oy = b * k,
+                oy1 = b1 * k;
             ctx.moveTo(x - a, y);
             ctx.bezierCurveTo(x - a, y - oy, x - ox, y - b, x, y - b);
             ctx.bezierCurveTo(x + ox, y - b, x + a, y - oy, x + a, y);
-            ctx.bezierCurveTo(x + a, y + oy, x + ox, y + b, x, y + b);
-            ctx.bezierCurveTo(x - ox, y + b, x - a, y + oy, x - a, y);
+            ctx.bezierCurveTo(x + a, y + oy1, x + ox, y + b1, x, y + b1);
+            ctx.bezierCurveTo(x - ox, y + b1, x - a, y + oy1, x - a, y);
             ctx.closePath();
         }
         ctx.beginPath();
-        if (width === height) {
+        if (width === heightTop && width === heightBottom) {
             ctx.arc(pt.x, pt.y, width, 0, 2 * Math.PI);
         } else if (ctx.ellipse) {
-            ctx.ellipse(pt.x, pt.y, width, height, 0, 0, Math.PI / 180 * 360);
+            if (heightTop !== heightBottom) {
+                // the order is clockwise
+                ctx.ellipse(pt.x, pt.y, width, heightTop, 0, RADIAN * 180, RADIAN * 360, false);
+                ctx.ellipse(pt.x, pt.y, width, heightBottom, 0, 0, RADIAN * 180, false);
+            } else {
+                ctx.ellipse(pt.x, pt.y, width, heightTop, 0, 0, RADIAN * 360, false);
+            }
         } else {
             // IE
-            bezierEllipse(pt.x, pt.y, width, height);
+            bezierEllipse(pt.x, pt.y, width, heightTop, heightBottom);
         }
-        Canvas.fillCanvas(ctx, fillOpacity, pt.x - width, pt.y - height);
-        Canvas._stroke(ctx, lineOpacity, pt.x - width, pt.y - height);
+        Canvas.fillCanvas(ctx, fillOpacity, pt.x - width, pt.y - heightTop);
+        Canvas._stroke(ctx, lineOpacity, pt.x - width, pt.y - heightTop);
     },
 
     rectangle(ctx, pt, size, lineOpacity, fillOpacity) {
         // pt = pt._round();
+        const { x, y } = pt;
         ctx.beginPath();
-        ctx.rect(pt.x, pt.y, size['width'], size['height']);
-        Canvas.fillCanvas(ctx, fillOpacity, pt.x, pt.y);
-        Canvas._stroke(ctx, lineOpacity, pt.x, pt.y);
+        ctx.rect(x, y, size['width'], size['height']);
+        Canvas.fillCanvas(ctx, fillOpacity, x, y);
+        Canvas._stroke(ctx, lineOpacity, x, y);
     },
 
     sector(ctx, pt, size, angles, lineOpacity, fillOpacity) {
-        const rad = Math.PI / 180;
+        const rad = RADIAN;
         const startAngle = angles[0],
             endAngle = angles[1];
 
@@ -784,15 +855,15 @@ const Canvas = {
         return !isString(style) && !('addColorStop' in style);
     },
 
-    drawCross(ctx, p, lineWidth, color) {
+    drawCross(ctx, x, y, lineWidth, color) {
         ctx.canvas._drawn = true;
         ctx.strokeStyle = color;
         ctx.lineWidth = lineWidth;
         ctx.beginPath();
-        ctx.moveTo(p.x - 5, p.y);
-        ctx.lineTo(p.x + 5, p.y);
-        ctx.moveTo(p.x, p.y - 5);
-        ctx.lineTo(p.x, p.y + 5);
+        ctx.moveTo(x - 5, y);
+        ctx.lineTo(x + 5, y);
+        ctx.moveTo(x, y - 5);
+        ctx.lineTo(x, y + 5);
         ctx.stroke();
     },
 
@@ -802,6 +873,31 @@ const Canvas = {
         target.height = canvas.height;
         target.getContext('2d').drawImage(canvas, 0, 0);
         return target;
+    },
+
+    // pixel render
+    pixelRect(ctx, point, lineOpacity, fillOpacity) {
+        const lineWidth = ctx.lineWidth;
+        const alpha = ctx.globalAlpha;
+        if (lineWidth > 0 && lineOpacity > 0) {
+            if (ctx.fillStyle !== ctx.strokeStyle) {
+                ctx.fillStyle = ctx.strokeStyle;
+            }
+            if (lineOpacity < 1) {
+                ctx.globalAlpha *= lineOpacity;
+            }
+        } else if (fillOpacity > 0) {
+            if (fillOpacity < 1) {
+                ctx.globalAlpha *= fillOpacity;
+            }
+        } else {
+            return;
+        }
+        ctx.canvas._drawn = true;
+        ctx.fillRect(point[0], point[1], 1, 1);
+        if (ctx.globalAlpha !== alpha) {
+            ctx.globalAlpha = alpha;
+        }
     }
 };
 
@@ -878,13 +974,25 @@ function drawDashLine(ctx, startPoint, endPoint, dashArray) {
 }
 
 const prefix = 'data:image/';
-function isImageUrl(url) {
-    return url.length > prefix.length && url.substring(0, prefix.length) === prefix || isCssUrl(url);
-}
 
 function extractImageUrl(url) {
     if (url.substring(0, prefix.length) === prefix) {
         return url;
     }
     return extractCssUrl(url);
+}
+
+function copyProperties(ctx, savedCtx) {
+    ctx.filter = savedCtx.filter;
+    ctx.fillStyle = savedCtx.fillStyle;
+    ctx.globalAlpha = savedCtx.globalAlpha;
+    ctx.lineCap = savedCtx.lineCap;
+    ctx.lineDashOffset = savedCtx.lineDashOffset;
+    ctx.lineJoin = savedCtx.lineJoin;
+    ctx.lineWidth = savedCtx.lineWidth;
+    ctx.shadowBlur = savedCtx.shadowBlur;
+    ctx.shadowColor = savedCtx.shadowColor;
+    ctx.shadowOffsetX = savedCtx.shadowOffsetX;
+    ctx.shadowOffsetY = savedCtx.shadowOffsetY;
+    ctx.strokeStyle = savedCtx.strokeStyle;
 }

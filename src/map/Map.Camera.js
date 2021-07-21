@@ -1,13 +1,15 @@
 import Map from './Map';
 import Point from '../geo/Point';
+import Coordinate from '../geo/Coordinate';
 import * as mat4 from '../core/util/mat4';
-import { subtract, add, scale, normalize, dot, set } from '../core/util/vec3';
+import { subtract, add, scale, normalize, dot, set, distance } from '../core/util/vec3';
 import { clamp, interpolate, wrap } from '../core/util';
 import { applyMatrix, matrixToQuaternion, quaternionToMatrix, lookAt, setPosition } from '../core/util/math';
 import Browser from '../core/Browser';
 
 const RADIAN = Math.PI / 180;
 const DEFAULT_FOV = 0.6435011087932844;
+const TEMP_COORD = new Coordinate(0, 0);
 
 /*!
  * contains code from mapbox-gl-js
@@ -53,7 +55,7 @@ Map.include(/** @lends Map.prototype */{
           * @property {Number} from                    - fovchange from
           * @property {Number} to                      - fovchange to
         */
-        this._fireEvent('fovchange', { 'from' : from, 'to': this.getFov() });
+        this._fireEvent('fovchange', { 'from': from, 'to': this.getFov() });
         return this;
     },
 
@@ -89,7 +91,7 @@ Map.include(/** @lends Map.prototype */{
           * @property {Number} from                    - bearing rotate from
           * @property {Number} to                      - bearing rotate to
         */
-        this._fireEvent('rotatestart', { 'from' : from, 'to': b });
+        this._fireEvent('rotatestart', { 'from': from, 'to': b });
         this._angle = b;
         this._calcMatrices();
         this._renderLayers();
@@ -103,7 +105,7 @@ Map.include(/** @lends Map.prototype */{
           * @property {Number} from                    - bearing rotate from
           * @property {Number} to                      - bearing rotate to
         */
-        this._fireEvent('rotate', { 'from' : from, 'to': b });
+        this._fireEvent('rotate', { 'from': from, 'to': b });
         /*
           * rotateend event
           * @event Map#rotateend
@@ -113,7 +115,7 @@ Map.include(/** @lends Map.prototype */{
           * @property {Number} from                    - bearing rotate from
           * @property {Number} to                      - bearing rotate to
         */
-        this._fireEvent('rotateend', { 'from' : from, 'to': b });
+        this._fireEvent('rotateend', { 'from': from, 'to': b });
         return this;
     },
 
@@ -149,7 +151,7 @@ Map.include(/** @lends Map.prototype */{
           * @property {Number} from                    - pitch from
           * @property {Number} to                      - pitch to
         */
-        this._fireEvent('pitchstart', { 'from' : from, 'to': p });
+        this._fireEvent('pitchstart', { 'from': from, 'to': p });
         this._pitch = p;
         this._calcMatrices();
         this._renderLayers();
@@ -162,7 +164,7 @@ Map.include(/** @lends Map.prototype */{
           * @property {Number} from                    - pitch from
           * @property {Number} to                      - pitch to
           */
-        this._fireEvent('pitch', { 'from' : from, 'to': p });
+        this._fireEvent('pitch', { 'from': from, 'to': p });
         /**
           * pitchend event
           * @event Map#pitchend
@@ -172,7 +174,7 @@ Map.include(/** @lends Map.prototype */{
           * @property {Number} from                    - pitchend from
           * @property {Number} to                      - pitchend to
           */
-        this._fireEvent('pitchend', { 'from' : from, 'to': p });
+        this._fireEvent('pitchend', { 'from': from, 'to': p });
         return this;
     },
 
@@ -186,6 +188,10 @@ Map.include(/** @lends Map.prototype */{
     },
 
     getFrustumAltitude() {
+        return this._frustumAltitude;
+    },
+
+    _calcFrustumAltitude() {
         const pitch = 90 - this.getPitch();
         let fov = this.getFov() / 2;
         const cameraAlt = this.cameraPosition ? this.cameraPosition[2] : 0;
@@ -206,29 +212,57 @@ Map.include(/** @lends Map.prototype */{
      * @param  {Number} [altitude=0]  target's altitude in 2d point system at target zoom
      * @return {Point}       containerPoint at current zoom
      * @private
+     * @function
      */
-    _pointToContainerPoint: function () {
+    _pointToContainerPoint: function (point, zoom, altitude = 0, out) {
+        if (!out) {
+            out = new Point(0, 0);
+        }
+        point = this._pointToPoint(point, zoom, out);
+        const isTransforming = this.isTransforming();
+        const res = this._getResolution(zoom) / this._getResolution();
+        let centerPoint;
+        if (!isTransforming && !altitude) {
+            centerPoint = this._prjToPoint(this._getPrjCenter(), undefined, TEMP_COORD);
+        }
+        this._toContainerPoint(out, isTransforming, res, altitude, centerPoint);
+        return out;
+    },
+
+    /**
+     *Batch conversion for better performance
+     */
+    _pointsToContainerPoints: function (points, zoom, altitudes = []) {
+        const altitudeIsArray = Array.isArray(altitudes);
+        const isTransforming = this.isTransforming();
+        const res = this._getResolution(zoom) / this._getResolution();
+        const centerPoint = this._prjToPoint(this._getPrjCenter(), undefined, TEMP_COORD);
+        const pts = [];
+        for (let i = 0, len = points.length; i < len; i++) {
+            const point = points[i].copy()._multi(res);
+            const altitude = altitudeIsArray ? (altitudes[i] || 0) : altitudes;
+            this._toContainerPoint(point, isTransforming, res, altitude, centerPoint);
+            pts.push(point);
+        }
+        return pts;
+    },
+
+    _toContainerPoint: function () {
         const a = [0, 0, 0];
-        return function (point, zoom, altitude = 0) {
-            point = this._pointToPoint(point, zoom);
-            if (this.isTransforming() || altitude) {
-                //convert altitude at zoom to current zoom
-                altitude *= this.getResolution(zoom) / this.getResolution();
+        return function (out, isTransforming, res, altitude, centerPoint) {
+            const w2 = this.width / 2, h2 = this.height / 2;
+            if (isTransforming || altitude) {
+                altitude *= res;
                 const scale = this._glScale;
-                set(a, point.x * scale, point.y * scale, altitude * scale);
-                // let t = [point.x * scale, point.y * scale, altitude * scale];
-
+                set(a, out.x * scale, out.y * scale, altitude * scale);
                 const t = this._projIfBehindCamera(a, this.cameraPosition, this.cameraForward);
-
                 applyMatrix(t, t, this.projViewMatrix);
-
-                const w2 = this.width / 2, h2 = this.height / 2;
-                t[0] = (t[0] * w2) + w2;
-                t[1] = -(t[1] * h2) + h2;
-                return new Point(t[0], t[1]);
+                out.x = (t[0] * w2) + w2;
+                out.y = -(t[1] * h2) + h2;
             } else {
-                const centerPoint = this._prjToPoint(this._getPrjCenter());
-                return point._sub(centerPoint)._add(this.width / 2, this.height / 2);
+                out._sub(centerPoint.x, centerPoint.y);
+                out.set(out.x, -out.y);
+                out._add(w2, h2);
             }
         };
     }(),
@@ -236,22 +270,15 @@ Map.include(/** @lends Map.prototype */{
     // https://forum.unity.com/threads/camera-worldtoscreenpoint-bug.85311/#post-2121212
     _projIfBehindCamera: function () {
         const vectorFromCam = new Array(3);
-        const nVectorFromCam = new Array(3);
         const proj = new Array(3);
         const sub = new Array(3);
         return function (position, cameraPos, camForward) {
             subtract(vectorFromCam, position, cameraPos);
-            const cameraDot = dot(camForward, normalize(nVectorFromCam, vectorFromCam));
-            //const vectorFromCam = position - camera.transform.position;
-            //const camNormDot = dot(camForward, normalize([], vectorFromCam));
-            //if the point is behind the camera then project it onto the camera plane
-            if (cameraDot <= 0) {
-                //we are beind the camera, project the position on the camera plane
-                const camDot = dot(camForward, vectorFromCam);
-                scale(proj, camForward, camDot * 1.01);   //small epsilon to keep the position infront of the camera
+            const camNormDot = dot(camForward, vectorFromCam);
+            if (camNormDot <= 0) {
+                scale(proj, camForward, camNormDot * 1.01);
                 add(position, cameraPos, subtract(sub, vectorFromCam, proj));
             }
-
             return position;
         };
     }(),
@@ -263,12 +290,13 @@ Map.include(/** @lends Map.prototype */{
      * @param  {Number} zoom target zoom, current zoom in default
      * @return {Point}      2d point at target zoom
      * @private
+     * @function
      */
     _containerPointToPoint: function () {
         const cp = [0, 0, 0],
             coord0 = [0, 0, 0, 1],
             coord1 = [0, 0, 0, 1];
-        return function (p, zoom) {
+        return function (p, zoom, out) {
             if (this.isTransforming()) {
                 const w2 = this.width / 2 || 1, h2 = this.height / 2 || 1;
                 set(cp, (p.x - w2) / w2, (h2 - p.y) / h2, 0);
@@ -287,15 +315,22 @@ Map.include(/** @lends Map.prototype */{
                 const z1 = coord1[2];
 
                 const t = z0 === z1 ? 0 : (0 - z0) / (z1 - z0);
-
-                const point = new Point(interpolate(x0, x1, t), interpolate(y0, y1, t))._multi(1 / this._glScale);
-                return ((zoom === undefined || this.getZoom() === zoom) ? point : this._pointToPointAtZoom(point, zoom));
+                const x = interpolate(x0, x1, t);
+                const y = interpolate(y0, y1, t);
+                if (out) {
+                    out.x = x;
+                    out.y = y;
+                } else {
+                    out = new Point(x, y);
+                }
+                out._multi(1 / this._glScale);
+                return ((zoom === undefined || this.getZoom() === zoom) ? out : this._pointToPointAtZoom(out, zoom, out));
             }
-            const centerPoint = this._prjToPoint(this._getPrjCenter(), zoom),
+            const centerPoint = this._prjToPoint(this._getPrjCenter(), zoom, out),
                 scale = (zoom !== undefined ? this._getResolution() / this._getResolution(zoom) : 1);
             const x = scale * (p.x - this.width / 2),
                 y = scale * (p.y - this.height / 2);
-            return centerPoint._add(x, y);
+            return centerPoint._add(x, -y);
         };
     }(),
 
@@ -315,44 +350,129 @@ Map.include(/** @lends Map.prototype */{
      */
     _calcMatrices: function () {
         // closure matrixes to reuse
-        const m0 = Browser.ie9 ? null : createMat4(),
-            m1 = Browser.ie9 ? null : createMat4();
+        const m1 = createMat4();
         return function () {
-            // get pixel size of map
-            if (Browser.ie9) {
-                return;
-            }
+            //必须先删除缓存的常用值，否则后面计算常用值时，会循环引用造成错误
+            delete this._mapRes;
+            delete this._mapGlRes;
+            delete this._mapExtent2D;
+            delete this._mapGlExtent2D;
             const size = this.getSize();
             const w = size.width || 1,
                 h = size.height || 1;
 
             this._glScale = this.getGLScale();
-            // get field of view
-            const fov = this.getFov() * Math.PI / 180;
-            const maxScale = this.getScale(this.getMinZoom()) / this.getScale(this.getMaxNativeZoom());
-            const farZ = maxScale * h / 2 / this._getFovRatio() * 1.4;
-            // camera projection matrix
-            const projMatrix = this.projMatrix || createMat4();
-            mat4.perspective(projMatrix, fov, w / h, 0.1, farZ);
-            this.projMatrix = projMatrix;
+            // const pitch = this.getPitch() * Math.PI / 180;
+
             // camera world matrix
             const worldMatrix = this._getCameraWorldMatrix();
+
+            // get field of view
+            const fov = this.getFov() * Math.PI / 180;
+            const farZ = this._getCameraFar(fov, this.getPitch());
+            this.cameraFar = farZ;
+            this.cameraNear = Math.max(this.cameraCenterDistance / 10, 0.1);
+            // camera projection matrix
+            const projMatrix = this.projMatrix || createMat4();
+            mat4.perspective(projMatrix, fov, w / h, this.cameraNear, farZ);
+            this.projMatrix = projMatrix;
+
             // view matrix
-            this.viewMatrix = mat4.invert(m0, worldMatrix);
+            this.viewMatrix = mat4.invert(this.viewMatrix || createMat4(), worldMatrix);
             // matrix for world point => screen point
             this.projViewMatrix = mat4.multiply(this.projViewMatrix || createMat4(), projMatrix, this.viewMatrix);
+            this._calcCascadeMatrixes();
             // matrix for screen point => world point
             this.projViewMatrixInverse = mat4.multiply(this.projViewMatrixInverse || createMat4(), worldMatrix, mat4.invert(m1, projMatrix));
             this.domCssMatrix = this._calcDomMatrix();
+            this._frustumAltitude = this._calcFrustumAltitude();
+            //缓存常用的值
+            this._mapRes = this._getResolution();
+            this._mapGlRes = this._getResolution(this.getGLZoom());
+            this._mapExtent2D = this._get2DExtent();
+            this._mapGlExtent2D = this._get2DExtent(this.getGLZoom());
+        };
+    }(),
+
+    _getCameraFar(fov, pitch) {
+        // const cameraCenterDistance = this.cameraCenterDistance = distance(this.cameraPosition, this.cameraLookAt);
+        // return 4 * cameraCenterDistance;
+        const cameraCenterDistance = this.cameraCenterDistance = distance(this.cameraPosition, this.cameraLookAt);
+        let farZ = cameraCenterDistance;
+        let y = 4 * cameraCenterDistance;
+        if (pitch > 0) {
+            pitch = pitch * Math.PI / 180;
+            if (2 / Math.PI - pitch > fov / 2) {
+                const tanFov = Math.tan(fov / 2);
+                const tanP = Math.tan(pitch);
+                y = Math.max((cameraCenterDistance * tanFov) / (1 / tanP - tanFov), y);
+            }
+        }
+        farZ += y;
+        //TODO 地下的图形无法显示
+        return farZ + 1.0;
+    },
+
+    _calcCascadeMatrixes: function () {
+        // const cameraLookAt = [];
+        // const cameraPosition = [];
+        // const cameraUp = [];
+        // const cameraForward = [];
+        // const cameraWorldMatrix = createMat4();
+        const projMatrix = createMat4();
+        // const viewMatrix = createMat4();
+        function cal(curPitch, pitch, out) {
+            const w = this.width;
+            const h = this.height;
+            const fov = this.getFov() * Math.PI / 180;
+            // const worldMatrix = this._getCameraWorldMatrix(
+            //     pitch, this.getBearing(),
+            //     cameraLookAt, cameraPosition, cameraUp, cameraForward, cameraWorldMatrix
+            // );
+
+            // get field of view
+            let farZ = this._getCameraFar(fov, pitch);
+            const cameraCenterDistance = this.cameraCenterDistance;
+            farZ = cameraCenterDistance + (farZ - cameraCenterDistance) / Math.cos((90 - pitch) * Math.PI / 180) * Math.cos((90 - curPitch) * Math.PI / 180);
+
+            // camera projection matrix
+            mat4.perspective(projMatrix, fov, w / h, 0.1, farZ);
+            // view matrix
+            // mat4.invert(viewMatrix, worldMatrix);
+            const viewMatrix = this.viewMatrix;
+            // matrix for world point => screen point
+            return mat4.multiply(out, projMatrix, viewMatrix);
+        }
+        return function () {
+
+            const pitch = this.getPitch();
+
+            const cascadePitch0 = this.options['cascadePitches'][0];
+            const cascadePitch1 = this.options['cascadePitches'][1];
+            const projViewMatrix0 = this.cascadeFrustumMatrix0 = this.cascadeFrustumMatrix0 || createMat4();
+            const projViewMatrix1 = this.cascadeFrustumMatrix1 = this.cascadeFrustumMatrix1 || createMat4();
+            if (pitch > cascadePitch0) {
+                cal.call(this, pitch, cascadePitch0, projViewMatrix0);
+            } else {
+                mat4.copy(this.cascadeFrustumMatrix0, this.projViewMatrix);
+            }
+            if (pitch > cascadePitch1) {
+                cal.call(this, pitch, cascadePitch1, projViewMatrix1);
+            } else {
+                mat4.copy(this.cascadeFrustumMatrix1, this.cascadeFrustumMatrix0);
+            }
         };
     }(),
 
     _calcDomMatrix: function () {
-        const m = Browser.ie9 ? null : createMat4(),
+        const m = createMat4(),
+            m1 = createMat4(),
             minusY = [1, -1, 1],
             arr = [0, 0, 0];
         return function () {
-            const cameraToCenterDistance = 0.5 / Math.tan(this._fov / 2) * this.height;
+            const width = this.width || 1;
+            const height = this.height || 1;
+            const cameraToCenterDistance = 0.5 / Math.tan(this._fov / 2) * height;
             mat4.scale(m, this.projMatrix, minusY);
             mat4.translate(m, m, set(arr, 0, 0, -cameraToCenterDistance));//[0, 0, cameraToCenterDistance]
             if (this._pitch) {
@@ -361,15 +481,14 @@ Map.include(/** @lends Map.prototype */{
             if (this._angle) {
                 mat4.rotateZ(m, m, this._angle);
             }
-            const m1 = createMat4();
-            mat4.scale(m1, m1, set(arr, this.width / 2, -this.height / 2, 1)); //[this.width / 2, -this.height / 2, 1]
+            mat4.identity(m1);
+            mat4.scale(m1, m1, set(arr, width / 2, -height / 2, 1)); //[this.width / 2, -this.height / 2, 1]
             return mat4.multiply(this.domCssMatrix || createMat4(), m1, m);
         };
     }(),
 
     _getCameraWorldMatrix: function () {
-        const q = {},
-            minusY = [1, -1, 1];
+        const q = {};
         return function () {
             const targetZ = this.getGLZoom();
 
@@ -379,7 +498,7 @@ Map.include(/** @lends Map.prototype */{
             this.cameraLookAt = set(this.cameraLookAt || [0, 0, 0], center2D.x, center2D.y, 0);
 
             const pitch = this.getPitch() * RADIAN;
-            const bearing = -this.getBearing() * RADIAN;
+            const bearing = this.getBearing() * RADIAN;
 
             const ratio = this._getFovRatio();
             const z = scale * (size.height || 1) / 2 / ratio;
@@ -387,8 +506,8 @@ Map.include(/** @lends Map.prototype */{
             // and [dist] away from map's center on XY plane to tilt the scene.
             const dist = Math.sin(pitch) * z;
             // when map rotates, the camera's xy position is rotating with the given bearing and still keeps [dist] away from map's center
-            const cx = center2D.x + dist * Math.sin(bearing);
-            const cy = center2D.y + dist * Math.cos(bearing);
+            const cx = center2D.x - dist * Math.sin(bearing);
+            const cy = center2D.y - dist * Math.cos(bearing);
             this.cameraPosition = set(this.cameraPosition || [0, 0, 0], cx, cy, cz);
             // when map rotates, camera's up axis is pointing to bearing from south direction of map
             // default [0,1,0] is the Y axis while the angle of inclination always equal 0
@@ -408,7 +527,7 @@ Map.include(/** @lends Map.prototype */{
             matrixToQuaternion(q, m);
             quaternionToMatrix(m, q);
             setPosition(m, this.cameraPosition);
-            mat4.scale(m, m, minusY);
+            // mat4.scale(m, m, minusY);
             return m;
         };
     }(),

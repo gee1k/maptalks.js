@@ -1,6 +1,8 @@
 import Class from '../../core/Class';
 import PointExtent from '../../geo/PointExtent';
 
+const TEMP_EXTENT = new PointExtent();
+
 /**
  * @classdesc
  * Painter for collection type geometries
@@ -11,16 +13,17 @@ export default class CollectionPainter extends Class {
     /**
      * @param {GeometryCollection} geometry - geometry to paint
      */
-    constructor(geometry) {
+    constructor(geometry, isMask) {
         super();
         this.geometry = geometry;
+        this.isMask = isMask;
     }
 
     _eachPainter(fn) {
         const geometries = this.geometry.getGeometries();
         let painter;
         for (let i = 0, len = geometries.length; i < len; i++) {
-            painter = geometries[i]._getPainter();
+            painter = this.isMask ? geometries[i]._getMaskPainter() : geometries[i]._getPainter();
             if (!painter) {
                 continue;
             }
@@ -41,10 +44,13 @@ export default class CollectionPainter extends Class {
         });
     }
 
-    get2DExtent(resources) {
-        let extent = new PointExtent();
+    get2DExtent(resources, out) {
+        if (out) {
+            out.set(null, null, null, null);
+        }
+        let extent = out || new PointExtent();
         this._eachPainter(painter => {
-            extent = extent.combine(painter.get2DExtent(resources));
+            extent = extent._combine(painter.get2DExtent(resources, TEMP_EXTENT));
         });
         return extent;
     }

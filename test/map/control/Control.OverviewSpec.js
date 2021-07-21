@@ -11,7 +11,7 @@ describe('Control.Overview', function () {
         document.body.appendChild(container);
         var option = {
             zoom: 17,
-            zoomAnimationDuration : 50,
+            zoomAnimationDuration : 20,
             center: center,
             overviewControl : true
         };
@@ -91,7 +91,7 @@ describe('Control.Overview', function () {
         overview.addTo(map);
         var zoom = overview._overview.getZoom();
         overview._overview.on('zoomend', function () {
-            expect(overview._overview.getZoom()).to.be.eql(zoom + 1);
+            expect(overview._overview.getZoom()).not.to.be.eql(zoom);
             done();
         });
         map.zoomIn();

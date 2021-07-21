@@ -1,10 +1,16 @@
 import Browser from '../core/Browser';
 import { isNil } from '../core/util';
-import { getFilterFeature, compileStyle } from '../core/mapbox';
 import Extent from '../geo/Extent';
 import Geometry from '../geometry/Geometry';
 import OverlayLayer from './OverlayLayer';
+import Painter from '../renderer/geometry/Painter';
+import CollectionPainter from '../renderer/geometry/CollectionPainter';
+import Coordinate from '../geo/Coordinate';
+import Point from '../geo/Point';
+import { LineString, Curve } from '../geometry';
+import PointExtent from '../geo/PointExtent';
 
+const TEMP_EXTENT = new PointExtent();
 /**
  * @property {Object}  options - VectorLayer's options
  * @property {Boolean} options.debug=false           - whether the geometries on the layer is in debug mode.
@@ -15,6 +21,9 @@ import OverlayLayer from './OverlayLayer';
  * @property {Boolean} [options.enableAltitude=false]  - whether to enable render geometry with altitude, false by default
  * @property {Boolean} [options.altitudeProperty=altitude] - geometry's altitude property name, if enableAltitude is true, "altitude" by default
  * @property {Boolean} [options.drawAltitude=false]  - whether to draw altitude: a vertical line for marker, a vertical polygon for line
+ * @property {Boolean} [options.sortByDistanceToCamera=false]  - markers Sort by camera distance
+ * @property {Boolean} [options.roundPoint=false]  - round point before painting to improve performance, but will cause geometry shaking in animation
+ * @property {Number} [options.altitude=0]           - layer altitude
  * @property {Boolean} [options.debug=false]         - whether the geometries on the layer is in debug mode.
  * @memberOf VectorLayer
  * @instance
@@ -26,9 +35,12 @@ const options = {
     'defaultIconSize': [20, 20],
     'cacheVectorOnCanvas': true,
     'cacheSvgOnCanvas': Browser.gecko,
-    'enableAltitude' : false,
-    'altitudeProperty' : 'altitude',
-    'drawAltitude' : false
+    'enableAltitude': false,
+    'altitudeProperty': 'altitude',
+    'drawAltitude': false,
+    'sortByDistanceToCamera': false,
+    'roundPoint': false,
+    'altitude': 0
 };
 
 /**
@@ -48,94 +60,6 @@ class VectorLayer extends OverlayLayer {
      */
     constructor(id, geometries, options) {
         super(id, geometries, options);
-        const style = this.options['style'];
-        delete this.options['style'];
-        if (style) {
-            this.setStyle(style);
-        }
-    }
-
-    /**
-     * Gets layer's style.
-     * @return {Object|Object[]} layer's style
-     */
-    getStyle() {
-        if (!this._style) {
-            return null;
-        }
-        return this._style;
-    }
-
-    /**
-     * Sets style to the layer, styling the geometries satisfying the condition with style's symbol. <br>
-     * Based on filter type in [mapbox-gl-js's style specification]{https://www.mapbox.com/mapbox-gl-js/style-spec/#types-filter}.
-     * @param {Object|Object[]} style - layer's style
-     * @returns {VectorLayer} this
-     * @fires VectorLayer#setstyle
-     * @example
-     * layer.setStyle([
-        {
-          'filter': ['==', 'count', 100],
-          'symbol': {'markerFile' : 'foo1.png'}
-        },
-        {
-          'filter': ['==', 'count', 200],
-          'symbol': {'markerFile' : 'foo2.png'}
-        }
-      ]);
-     */
-    setStyle(style) {
-        this._style = style;
-        this._cookedStyles = compileStyle(style);
-        this.forEach(function (geometry) {
-            this._styleGeometry(geometry);
-        }, this);
-        /**
-         * setstyle event.
-         *
-         * @event VectorLayer#setstyle
-         * @type {Object}
-         * @property {String} type - setstyle
-         * @property {VectorLayer} target - layer
-         * @property {Object|Object[]}       style - style to set
-         */
-        this.fire('setstyle', {
-            'style': style
-        });
-        return this;
-    }
-
-    /**
-     * Removes layers' style
-     * @returns {VectorLayer} this
-     * @fires VectorLayer#removestyle
-     */
-    removeStyle() {
-        if (!this._style) {
-            return this;
-        }
-        delete this._style;
-        delete this._cookedStyles;
-        this.forEach(function (geometry) {
-            geometry._setExternSymbol(null);
-        }, this);
-        /**
-         * removestyle event.
-         *
-         * @event VectorLayer#removestyle
-         * @type {Object}
-         * @property {String} type - removestyle
-         * @property {VectorLayer} target - layer
-         */
-        this.fire('removestyle');
-        return this;
-    }
-
-    onAddGeometry(geo) {
-        const style = this.getStyle();
-        if (style) {
-            this._styleGeometry(geo);
-        }
     }
 
     onConfig(conf) {
@@ -148,27 +72,80 @@ class VectorLayer extends OverlayLayer {
         }
     }
 
-    _styleGeometry(geometry) {
-        if (!this._cookedStyles) {
-            return false;
-        }
-        const g = getFilterFeature(geometry);
-        for (let i = 0, len = this._cookedStyles.length; i < len; i++) {
-            if (this._cookedStyles[i]['filter'](g) === true) {
-                geometry._setExternSymbol(this._cookedStyles[i]['symbol']);
-                return true;
-            }
-        }
-        return false;
-    }
-
+    /**
+     * Identify the geometries on the given coordinate
+     * @param  {maptalks.Coordinate} coordinate   - coordinate to identify
+     * @param  {Object} [options=null]  - options
+     * @param  {Object} [options.tolerance=0] - identify tolerance in pixel
+     * @param  {Object} [options.count=null]  - result count
+     * @return {Geometry[]} geometries identified
+     */
     identify(coordinate, options = {}) {
         const renderer = this.getRenderer();
-        // only iterate drawn geometries when onlyVisible is true.
-        if (options['onlyVisible'] && renderer && renderer.identify) {
-            return renderer.identify(coordinate, options);
+        if (!(coordinate instanceof Coordinate)) {
+            coordinate = new Coordinate(coordinate);
         }
-        return super.identify(coordinate, options);
+        const cp = this.getMap().coordToContainerPoint(coordinate);
+        // only iterate drawn geometries when onlyVisible is true.
+        if (options['onlyVisible'] && renderer && renderer.identifyAtPoint) {
+            return renderer.identifyAtPoint(cp, options);
+        }
+        return this._hitGeos(this._geoList, cp, options);
+    }
+
+    /**
+     * Identify the geometries on the given container point
+     * @param  {maptalks.Point} point   - container point to identify
+     * @param  {Object} [options=null]  - options
+     * @param  {Object} [options.tolerance=0] - identify tolerance in pixel
+     * @param  {Object} [options.count=null]  - result count
+     * @return {Geometry[]} geometries identified
+     */
+    identifyAtPoint(point, options = {}) {
+        const renderer = this.getRenderer();
+        if (!(point instanceof Point)) {
+            point = new Point(point);
+        }
+        // only iterate drawn geometries when onlyVisible is true.
+        if (options['onlyVisible'] && renderer && renderer.identifyAtPoint) {
+            return renderer.identifyAtPoint(point, options);
+        }
+        return this._hitGeos(this._geoList, point, options);
+    }
+
+    _hitGeos(geometries, cp, options = {}) {
+        const filter = options['filter'],
+            tolerance = options['tolerance'],
+            hits = [];
+        for (let i = geometries.length - 1; i >= 0; i--) {
+            const geo = geometries[i];
+            if (!geo || !geo.isVisible() || !geo._getPainter() || !geo.options['interactive']) {
+                continue;
+            }
+            if (!(geo instanceof LineString) || (!geo._getArrowStyle() && !(geo instanceof Curve))) {
+                // Except for LineString with arrows or curves
+                let extent = geo.getContainerExtent(TEMP_EXTENT);
+                if (tolerance) {
+                    extent = extent._expand(tolerance);
+                }
+                if (!extent || !extent.contains(cp)) {
+                    continue;
+                }
+            }
+            if (geo._containsPoint(cp, tolerance) && (!filter || filter(geo))) {
+                hits.push(geo);
+                if (options['count']) {
+                    if (hits.length >= options['count']) {
+                        break;
+                    }
+                }
+            }
+        }
+        return hits;
+    }
+
+    getAltitude() {
+        return this.options['altitude'] || 0;
     }
 
     /**
@@ -188,9 +165,6 @@ class VectorLayer extends OverlayLayer {
             'id': this.getId(),
             'options': this.config()
         };
-        if ((isNil(options['style']) || options['style']) && this.getStyle()) {
-            profile['style'] = this.getStyle();
-        }
         if (isNil(options['geometries']) || options['geometries']) {
             let clipExtent;
             if (options['clipExtent']) {
@@ -236,10 +210,15 @@ class VectorLayer extends OverlayLayer {
             }
         }
         layer.addGeometry(geometries);
-        if (json['style']) {
-            layer.setStyle(json['style']);
-        }
         return layer;
+    }
+
+    static getPainterClass() {
+        return Painter;
+    }
+
+    static getCollectionPainterClass() {
+        return CollectionPainter;
     }
 }
 

@@ -146,6 +146,34 @@ class DistanceTool extends DrawTool {
         return this._lastMeasure;
     }
 
+    undo() {
+        super.undo();
+        const pointer = this._historyPointer;
+        if (pointer !== this._vertexes.length) {
+            for (let i = pointer; i < this._vertexes.length; i++) {
+                if (this._vertexes[i].label) {
+                    this._vertexes[i].label.remove();
+                }
+                this._vertexes[i].marker.remove();
+            }
+        }
+        return this;
+    }
+
+    redo() {
+        super.redo();
+        const i = this._historyPointer - 1;
+        if (this._vertexes[i]) {
+            if (!this._vertexes[i].marker.getLayer()) {
+                if (this._vertexes[i].label) {
+                    this._vertexes[i].label.addTo(this._measureMarkerLayer);
+                }
+                this._vertexes[i].marker.addTo(this._measureMarkerLayer);
+            }
+        }
+        return this;
+    }
+
     _measure(toMeasure) {
         const map = this.getMap();
         let length;
@@ -195,6 +223,7 @@ class DistanceTool extends DrawTool {
 
     _msOnDrawStart(param) {
         const map = this.getMap();
+        const prjCoord = map._pointToPrj(param['point2d']);
         const uid = UID();
         const layerId = 'distancetool_' + uid;
         const markerLayerId = 'distancetool_markers_' + uid;
@@ -208,12 +237,16 @@ class DistanceTool extends DrawTool {
         this._measureLayers.push(this._measureLineLayer);
         this._measureLayers.push(this._measureMarkerLayer);
         //start marker
-        new Marker(param['coordinate'], {
+        const marker = new Marker(param['coordinate'], {
             'symbol': this.options['vertexSymbol']
-        }).addTo(this._measureMarkerLayer);
+        });
+        //调用_setPrjCoordinates主要是为了解决repeatworld下，让它能标注在其他世界的问题
+        marker._setPrjCoordinates(prjCoord);
         const content = (this.options['language'] === 'zh-CN' ? '起点' : 'start');
         const startLabel = new Label(content, param['coordinate'], this.options['labelOptions']);
-        this._measureMarkerLayer.addGeometry(startLabel);
+        startLabel._setPrjCoordinates(prjCoord);
+        this._lastVertex = startLabel;
+        this._addVertexMarker(marker, startLabel);
     }
 
     _msOnMouseMove(param) {
@@ -228,9 +261,13 @@ class DistanceTool extends DrawTool {
             this._tailLabel = new Label(ms, param['coordinate'], this.options['labelOptions'])
                 .addTo(this._measureMarkerLayer);
         }
+        const prjCoords = this._geometry._getPrjCoordinates();
+        const lastCoord = prjCoords[prjCoords.length - 1];
         this._tailMarker.setCoordinates(param['coordinate']);
+        this._tailMarker._setPrjCoordinates(lastCoord);
         this._tailLabel.setContent(ms);
         this._tailLabel.setCoordinates(param['coordinate']);
+        this._tailLabel._setPrjCoordinates(lastCoord);
     }
 
     _msGetCoordsToMeasure(param) {
@@ -238,30 +275,55 @@ class DistanceTool extends DrawTool {
     }
 
     _msOnDrawVertex(param) {
+        const prjCoords = this._geometry._getPrjCoordinates();
+        const lastCoord = prjCoords[prjCoords.length - 1];
         const geometry = param['geometry'];
         //vertex marker
-        new Marker(param['coordinate'], {
+        const marker = new Marker(param['coordinate'], {
             'symbol': this.options['vertexSymbol']
-        }).addTo(this._measureMarkerLayer);
+        });
+
         const length = this._measure(geometry);
         const vertexLabel = new Label(length, param['coordinate'], this.options['labelOptions']);
-        this._measureMarkerLayer.addGeometry(vertexLabel);
+        this._addVertexMarker(marker, vertexLabel);
+        vertexLabel._setPrjCoordinates(lastCoord);
+        marker._setPrjCoordinates(lastCoord);
         this._lastVertex = vertexLabel;
+    }
+
+    _addVertexMarker(marker, vertexLabel) {
+        if (!this._vertexes) {
+            this._vertexes = [];
+        }
+        if (this._historyPointer !== undefined && this._vertexes.length > this._historyPointer - 1) {
+            this._vertexes.length = this._historyPointer - 1;
+        }
+        this._vertexes.push({ label: vertexLabel, marker });
+        this._measureMarkerLayer.addGeometry(marker);
+        if (vertexLabel) {
+            this._measureMarkerLayer.addGeometry(vertexLabel);
+        }
     }
 
     _msOnDrawEnd(param) {
         this._clearTailMarker();
+        if (param['geometry']._getPrjCoordinates().length < 2) {
+            this._lastMeasure = 0;
+            this._clearMeasureLayers();
+            return;
+        }
         let size = this._lastVertex.getSize();
         if (!size) {
             size = new Size(10, 10);
         }
-        this._addClearMarker(this._lastVertex.getCoordinates(), size['width']);
+        this._addClearMarker(this._lastVertex.getCoordinates(), this._lastVertex._getPrjCoordinates(), size['width']);
         const geo = param['geometry'].copy();
+        geo._setPrjCoordinates(param['geometry']._getPrjCoordinates());
         geo.addTo(this._measureLineLayer);
         this._lastMeasure = geo.getLength();
     }
 
-    _addClearMarker(coordinates, dx) {
+    _addClearMarker(coordinates, prjCoord, dx) {
         let symbol = this.options['clearButtonSymbol'];
         let dxSymbol = {
             'markerDx' : (symbol['markerDx'] || 0) + dx,
@@ -291,6 +353,7 @@ class DistanceTool extends DrawTool {
             return false;
         }, this);
         endMarker.addTo(this._measureMarkerLayer);
+        endMarker._setPrjCoordinates(prjCoord);
     }
 
     _clearTailMarker() {
@@ -302,6 +365,11 @@ class DistanceTool extends DrawTool {
             this._tailLabel.remove();
             delete this._tailLabel;
         }
+    }
+
+    _clearMeasureLayers() {
+        this._measureLineLayer.remove();
+        this._measureMarkerLayer.remove();
     }
 
 }

@@ -1,4 +1,4 @@
-import { extend } from '../core/util';
+import { extend, isFunction, sign } from '../core/util';
 import { trim } from '../core/util/strings';
 import {
     on,
@@ -12,7 +12,6 @@ import {
 import Browser from '../core/Browser';
 import Class from '../core/Class';
 import Eventable from '../core/Eventable';
-import Point from '../geo/Point';
 import Size from '../geo/Size';
 import Geometry from '../geometry/Geometry';
 
@@ -27,20 +26,25 @@ import Geometry from '../geometry/Geometry';
  * @property {Boolean} [options.single=true]    - whether the UI is a global single one, only one UI will be shown at the same time if set to true.
  * @property {Boolean} [options.animation=null]         - fade | scale | fade,scale, add animation effect when showing and hiding.
  * @property {Number}  [options.animationDuration=300]  - animation duration, in milliseconds.
+ * @property {Boolean}  [options.pitchWithMap=false]    - whether tilt with map
+ * @property {Boolean}  [options.rotateWithMap=false]  - whether rotate with map
  * @memberOf ui.UIComponent
  * @instance
  */
 const options = {
-    'eventsPropagation' : false,
+    'eventsPropagation': false,
     'eventsToStop': null,
     'dx': 0,
     'dy': 0,
     'autoPan': false,
-    'autoPanDuration' : 600,
+    'autoPanDuration': 600,
     'single': true,
     'animation': 'scale',
     'animationOnHide': true,
-    'animationDuration': 500
+    'animationDuration': 500,
+    'pitchWithMap': false,
+    'rotateWithMap': false,
+    'visible': true
 };
 
 /**
@@ -130,7 +134,7 @@ class UIComponent extends Eventable(Class) {
         if (!map) {
             return this;
         }
-
+        this.options['visible'] = true;
         if (!this._mapEventsOn) {
             this._switchMapEvents('on');
         }
@@ -193,13 +197,15 @@ class UIComponent extends Eventable(Class) {
             if (anim.scale) {
                 if (this.getTransformOrigin) {
                     const origin = this.getTransformOrigin();
-                    dom.style[TRANSFORMORIGIN] = origin.x + 'px ' + origin.y + 'px';
+                    dom.style[TRANSFORMORIGIN] = origin;
                 }
-                dom.style[TRANSFORM] = toCSSTranslate(this._pos) + ' scale(0)';
+                dom.style[TRANSFORM] = this._toCSSTranslate(this._pos) + ' scale(0)';
             }
         }
-
-        dom.style.display = '';
+        //not support zoom filter show dom
+        if (!this.isSupportZoomFilter()) {
+            dom.style.display = '';
+        }
 
         if (this.options['eventsToStop']) {
             on(dom, this.options['eventsToStop'], stopPropagation);
@@ -223,7 +229,7 @@ class UIComponent extends Eventable(Class) {
                 dom.style.opacity = 1;
             }
             if (anim.scale) {
-                dom.style[TRANSFORM] = toCSSTranslate(this._pos) + ' scale(1)';
+                dom.style[TRANSFORM] = this._toCSSTranslate(this._pos) + ' scale(1)';
             }
         }
 
@@ -240,7 +246,7 @@ class UIComponent extends Eventable(Class) {
         if (!this.getDOM() || !this.getMap()) {
             return this;
         }
-
+        this.options['visible'] = false;
         const anim = this._getAnimation(),
             dom = this.getDOM();
         if (!this.options['animationOnHide']) {
@@ -248,6 +254,15 @@ class UIComponent extends Eventable(Class) {
         }
         if (!anim.ok) {
             dom.style.display = 'none';
+            /**
+           * hide event.
+           *
+           * @event ui.UIComponent#hide
+           * @type {Object}
+           * @property {String} type - hide
+           * @property {ui.UIComponent} target - UIComponent
+           */
+            this.fire('hide');
         } else {
             /* eslint-disable no-unused-expressions */
             dom.offsetHeight;
@@ -255,24 +270,15 @@ class UIComponent extends Eventable(Class) {
             dom.style[TRANSITION] = anim.transition;
             setTimeout(() => {
                 dom.style.display = 'none';
+                this.fire('hide');
             }, this.options['animationDuration']);
         }
         if (anim.fade) {
             dom.style.opacity = 0;
         }
         if (anim.scale) {
-            dom.style[TRANSFORM] = toCSSTranslate(this._pos) + ' scale(0)';
+            dom.style[TRANSFORM] = this._toCSSTranslate(this._pos) + ' scale(0)';
         }
-
-        /**
-         * hide event.
-         *
-         * @event ui.UIComponent#hide
-         * @type {Object}
-         * @property {String} type - hide
-         * @property {ui.UIComponent} target - UIComponent
-         */
-        this.fire('hide');
         return this;
     }
 
@@ -281,6 +287,9 @@ class UIComponent extends Eventable(Class) {
      * @returns {Boolean} true|false
      */
     isVisible() {
+        if (!this.options['visible']) {
+            return false;
+        }
         const dom = this.getDOM();
         return this.getMap() && dom && dom.parentNode && dom.style.display !== 'none';
     }
@@ -379,8 +388,20 @@ class UIComponent extends Eventable(Class) {
     }
 
     _getViewPoint() {
-        return this.getMap().coordToViewPoint(this._coordinate)
+        let alt = 0;
+        if (this._owner && this._owner.getAltitude) {
+            const altitude = this._owner.getAltitude();
+            if (altitude > 0) {
+                alt = this._meterToPoint(this._coordinate, altitude);
+            }
+        }
+        return this.getMap().coordToViewPoint(this._coordinate, undefined, alt)
             ._add(this.options['dx'], this.options['dy']);
+    }
+
+    _meterToPoint(center, altitude) {
+        const map = this.getMap();
+        return map.distanceToPoint(altitude, 0, undefined, center).x * sign(altitude);
     }
 
     _autoPan() {
@@ -389,28 +410,37 @@ class UIComponent extends Eventable(Class) {
         if (map.isMoving()) {
             return;
         }
-        const point = this._pos;
-        const mapSize = map.getSize(),
-            mapWidth = mapSize['width'],
-            mapHeight = mapSize['height'];
+        const point = this._getViewPoint()._round();
+        const mapWidth = map.width;
+        const mapHeight = map.height;
 
-        const containerPoint = map.viewPointToContainerPoint(point);
-        const clientWidth = parseInt(dom.clientWidth),
-            clientHeight = parseInt(dom.clientHeight);
+        const containerPoint0 = map.viewPointToContainerPoint(point);
+        const offset = this.getOffset();
+        const containerPoint = containerPoint0.add(offset);
+
+        const prjCoord = map._viewPointToPrj(point);
+        const domWidth = parseInt(dom.clientWidth);
+        const domHeight = parseInt(dom.clientHeight);
+        const margin = 50;
         let left = 0,
             top = 0;
         if ((containerPoint.x) < 0) {
-            left = -(containerPoint.x - clientWidth / 2);
-        } else if ((containerPoint.x + clientWidth - 35) > mapWidth) {
-            left = (mapWidth - (containerPoint.x + clientWidth * 3 / 2));
+            left = -containerPoint.x + margin;
+        } else if ((containerPoint.x + domWidth) > mapWidth) {
+            left = -((containerPoint.x + domWidth) - mapWidth) - margin;
         }
         if (containerPoint.y < 0) {
-            top = -containerPoint.y + 50;
-        } else if (containerPoint.y > mapHeight) {
-            top = (mapHeight - containerPoint.y - clientHeight) - 30;
+            top = -(containerPoint.y) + margin;
+        } else if (containerPoint.y + domHeight > mapHeight) {
+            top = (mapHeight - (containerPoint.y + domHeight)) - margin;
         }
+
         if (top !== 0 || left !== 0) {
-            map.panBy(new Point(left, top), { 'duration' : this.options['autoPanDuration'] });
+            const newContainerPoint = containerPoint0.add(left, top);
+            const t = map._containerPointToPoint(newContainerPoint)._sub(map._prjToPoint(map._getPrjCenter()));
+            const target = map._pointToPrj(map._prjToPoint(prjCoord).sub(t));
+            // map.panBy(new Point(left, top), { 'duration': this.options['autoPanDuration'] });
+            map._panAnimation(target);
         }
     }
 
@@ -424,13 +454,14 @@ class UIComponent extends Eventable(Class) {
         const container = this._getUIContainer();
         dom.style.position = 'absolute';
         dom.style.left = -99999 + 'px';
-        dom.style.top = -99999 + 'px';
+        const anchor = dom.style.bottom ? 'bottom' : 'top';
+        dom.style[anchor] = -99999 + 'px';
         dom.style.display = '';
         container.appendChild(dom);
         this._size = new Size(dom.clientWidth, dom.clientHeight);
         dom.style.display = 'none';
         dom.style.left = '0px';
-        dom.style.top = '0px';
+        dom.style[anchor] = '0px';
         return this._size;
     }
 
@@ -519,8 +550,9 @@ class UIComponent extends Eventable(Class) {
     _getDefaultEvents() {
         return {
             'zooming rotate pitch': this.onEvent,
-            'zoomend' : this.onZoomEnd,
-            'moving': this.onMoving
+            'zoomend': this.onZoomEnd,
+            'moving': this.onMoving,
+            'resize': this.onResize
         };
     }
 
@@ -560,6 +592,13 @@ class UIComponent extends Eventable(Class) {
         }
     }
 
+    onResize() {
+        if (this.isVisible()) {
+            //when map resize , update position
+            this._setPosition();
+        }
+    }
+
     _updatePosition() {
         // update position in the next frame to sync with layers
         const renderer = this.getMap()._getRenderer();
@@ -567,25 +606,52 @@ class UIComponent extends Eventable(Class) {
     }
 
     _setPosition() {
-        const dom = this.getDOM(),
-            p = this.getPosition();
-        this._pos = p;
+        const dom = this.getDOM();
+        if (!dom) return;
         dom.style[TRANSITION] = null;
-        dom.style[TRANSFORM] = toCSSTranslate(p) + ' scale(1)';
+        const p = this.getPosition();
+        this._pos = p;
+        dom.style[TRANSFORM] = this._toCSSTranslate(p) + ' scale(1)';
+    }
+
+    _toCSSTranslate(p) {
+        if (!p) {
+            return '';
+        }
+        if (Browser.any3d) {
+            const map = this.getMap(),
+                bearing = map ? map.getBearing() : 0,
+                pitch = map ? map.getPitch() : 0;
+            let r = '';
+            if (this.options['pitchWithMap'] && pitch) {
+                r += ` rotateX(${Math.round(pitch)}deg)`;
+            }
+            if (this.options['rotateWithMap'] && bearing) {
+                r += ` rotateZ(${Math.round(-bearing)}deg)`;
+            }
+            return 'translate3d(' + p.x + 'px,' + p.y + 'px, 0px)' + r;
+        } else {
+            return 'translate(' + p.x + 'px,' + p.y + 'px)';
+        }
+    }
+
+    isSupportZoomFilter() {
+        return false;
+    }
+
+    /*
+     *
+     * @param {Geometry||ui.UIMarker} owner
+     * @return {Boolean}
+     */
+    static isSupport(owner) {
+        if (owner && isFunction(owner.on) && isFunction(owner.off) && isFunction(owner.getCenter)) {
+            return true;
+        }
+        return false;
     }
 }
 
 UIComponent.mergeOptions(options);
-
-function toCSSTranslate(p) {
-    if (!p) {
-        return '';
-    }
-    if (Browser.any3d) {
-        return 'translate3d(' + p.x + 'px,' + p.y + 'px, 0px)';
-    } else {
-        return 'translate(' + p.x + 'px,' + p.y + 'px)';
-    }
-}
 
 export default UIComponent;

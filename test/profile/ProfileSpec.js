@@ -66,7 +66,7 @@ describe('Map.Profile', function () {
             expect(json).to.be.ok();
             expect(json.options).to.eql(vectorLayer.config());
             expect(json.id).to.eql(vectorLayer.getId());
-            expect(json.style).to.eql(style);
+            expect(json.options.style).to.eql(style);
             expect(json.geometries).to.be.ok();
             expect(json.geometries).to.have.length(geometries.length);
 
@@ -121,6 +121,8 @@ describe('Map.Profile', function () {
             var config = map.config();
             config.center = map.getCenter();
             config.zoom = map.getZoom();
+            config.bearing = map.getBearing();
+            config.pitch = map.getPitch();
             expect(profile.options).to.be.eql(config);
             expect(profile.baseLayer).to.be.ok();
 

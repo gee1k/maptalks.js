@@ -3,10 +3,11 @@ import { createGLContext, createProgram, enableVertexAttrib } from '../../core/u
 import Browser from '../../core/Browser';
 import * as mat4 from '../../core/util/mat4';
 import Canvas from '../../core/Canvas';
+import Point from '../../geo/Point';
 
 const shaders = {
     'vertexShader': `
-        attribute vec3 a_position;
+        attribute vec2 a_position;
 
         attribute vec2 a_texCoord;
 
@@ -15,7 +16,7 @@ const shaders = {
         varying vec2 v_texCoord;
 
         void main() {
-            gl_Position = u_matrix * vec4(a_position, 1.0);
+            gl_Position = u_matrix * vec4(a_position, 0., 1.);
 
             v_texCoord = a_texCoord;
         }
@@ -27,13 +28,16 @@ const shaders = {
         uniform sampler2D u_image;
 
         uniform float u_opacity;
+        uniform float u_debug_line;
 
         varying vec2 v_texCoord;
 
         void main() {
-
-            gl_FragColor = texture2D(u_image, v_texCoord) * u_opacity;
-
+            if (u_debug_line == 1.) {
+                gl_FragColor = vec4(0., 1., 0., 1.);
+            } else {
+                gl_FragColor = texture2D(u_image, v_texCoord) * u_opacity;
+            }
         }
     `
 };
@@ -42,6 +46,7 @@ const shaders = {
 const v2 = [0, 0],
     v3 = [0, 0, 0],
     arr16 = new Array(16);
+const DEBUG_POINT = new Point(20, 20);
 
 /**
  * A mixin providing image support in WebGL env
@@ -60,7 +65,10 @@ const ImageGLRenderable = Base => {
          * @param {Number} h - height at map's gl zoom
          * @param {Number} opacity
          */
-        drawGLImage(image, x, y, w, h, opacity) {
+        drawGLImage(image, x, y, w, h, scale, opacity, debug) {
+            if (this.gl.program !== this.program) {
+                this.useProgram(this.program);
+            }
             const gl = this.gl;
             this.loadTexture(image);
 
@@ -68,18 +76,78 @@ const ImageGLRenderable = Base => {
             v3[1] = y || 0;
             const uMatrix = mat4.identity(arr16);
             mat4.translate(uMatrix, uMatrix, v3);
+            mat4.scale(uMatrix, uMatrix, [scale, scale, 1]);
             mat4.multiply(uMatrix, this.getMap().projViewMatrix, uMatrix);
             gl.uniformMatrix4fv(this.program['u_matrix'], false, uMatrix);
             gl.uniform1f(this.program['u_opacity'], opacity);
-            if (!image.glBuffer)  {
+            gl.uniform1f(this.program['u_debug_line'], 0);
+
+            const { glBuffer } = image;
+            if (glBuffer && (glBuffer.width !== w || glBuffer.height !== h)) {
+                this.saveImageBuffer(glBuffer);
+                delete image.glBuffer;
+            }
+            if (!image.glBuffer) {
                 image.glBuffer = this.bufferTileData(0, 0, w, h);
             } else {
-                gl.bindBuffer(gl.ARRAY_BUFFER, image.glBuffer);
+                gl.bindBuffer(gl.ARRAY_BUFFER, glBuffer);
             }
 
             v2[0] = 'a_position';
-            v2[1] = 3;
+            v2[1] = 2;
+            v2[2] = image.glBuffer.type;
             this.enableVertexAttrib(v2); // ['a_position', 3]
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+            if (debug) {
+                this.drawDebug(uMatrix, v2, 0, 0, w, h, debug);
+            }
+        }
+
+        drawDebug(uMatrix, attrib, x, y, w, h, debugInfo) {
+            const gl = this.gl;
+            gl.bindBuffer(gl.ARRAY_BUFFER, this._debugBuffer);
+            this.enableVertexAttrib(['a_position', 2, 'FLOAT']);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+                x, y,
+                x + w, y,
+                x + w, y - h,
+                x, y - h,
+                x, y
+            ]), gl.DYNAMIC_DRAW);
+            gl.uniformMatrix4fv(this.program['u_matrix'], false, uMatrix);
+            gl.uniform1f(this.program['u_debug_line'], 1);
+            gl.drawArrays(gl.LINE_STRIP, 0, 5);
+            //draw debug info
+            let canvas = this._debugInfoCanvas;
+            if (!canvas) {
+                const dpr = this.getMap().getDevicePixelRatio() > 1 ? 2 : 1;
+                canvas = this._debugInfoCanvas = document.createElement('canvas');
+                canvas.width = 256 * dpr;
+                canvas.height = 32 * dpr;
+                const ctx = canvas.getContext('2d');
+                ctx.font = '20px monospace';
+                ctx.scale(dpr, dpr);
+            }
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const color = this.layer.options['debugOutline'];
+            Canvas.fillText(ctx, debugInfo, DEBUG_POINT, color);
+            this.loadTexture(canvas);
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
+            w = 256;
+            h = 32;
+            const x1 = x;
+            const x2 = x + w;
+            const y1 = y;
+            const y2 = y - h;
+            gl.bufferData(gl.ARRAY_BUFFER, this.set8(
+                x1, y1,
+                x1, y2,
+                x2, y1,
+                x2, y2
+            ), gl.DYNAMIC_DRAW);
+            gl.uniform1f(this.program['u_debug_line'], 0);
             gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
         }
 
@@ -87,12 +155,26 @@ const ImageGLRenderable = Base => {
             const x1 = x;
             const x2 = x + w;
             const y1 = y;
-            const y2 = y + h;
-            return this.loadImageBuffer(this.set12(
-                x1, y1, 0,
-                x1, y2, 0,
-                x2, y1, 0,
-                x2, y2, 0), buffer);
+            const y2 = y - h;
+            let data;
+            if (isInteger(x1) && isInteger(x2) && isInteger(y1) && isInteger(y2)) {
+                data = this.set8Int(
+                    x1, y1,
+                    x1, y2,
+                    x2, y1,
+                    x2, y2);
+            } else {
+                data = this.set8(
+                    x1, y1,
+                    x1, y2,
+                    x2, y1,
+                    x2, y2);
+            }
+            const glBuffer = this.loadImageBuffer(data, buffer);
+            glBuffer.width = w;
+            glBuffer.height = h;
+            glBuffer.type = data instanceof Int16Array ? 'SHORT' : 'FLOAT';
+            return glBuffer;
         }
 
         /**
@@ -138,7 +220,12 @@ const ImageGLRenderable = Base => {
          * Get webgl context(this.gl). It prefers canvas2, and will change to this.canvas if canvas2 is not created
          */
         createGLContext() {
-            const gl = this.gl = createGLContext(this.canvas2 || this.canvas, this.layer.options['glOptions']);
+            if (this.canvas.gl && this.canvas.gl.wrap) {
+                this.gl = this.canvas.gl.wrap();
+            } else {
+                this.gl = createGLContext(this.canvas2 || this.canvas, this.layer.options['glOptions']);
+            }
+            const gl = this.gl;
             gl.clearColor(0.0, 0.0, 0.0, 0.0);
 
             gl.disable(gl.DEPTH_TEST);
@@ -147,14 +234,15 @@ const ImageGLRenderable = Base => {
             gl.enable(gl.BLEND);
             gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 
-            this.program = this.createProgram(shaders['vertexShader'], this.layer.options['fragmentShader'] || shaders['fragmentShader'], ['u_matrix', 'u_image', 'u_opacity']);
-            this.useProgram(this.program);
+            this.program = this.createProgram(shaders['vertexShader'], this.layer.options['fragmentShader'] || shaders['fragmentShader']);
+            this._debugBuffer = this.createBuffer();
 
+            this.useProgram(this.program);
             // input texture vec data
             this.texBuffer = this.createBuffer();
             gl.bindBuffer(gl.ARRAY_BUFFER, this.texBuffer);
-            this.enableVertexAttrib(['a_texCoord', 2]);
-            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+            this.enableVertexAttrib(['a_texCoord', 2, 'UNSIGNED_BYTE']);
+            gl.bufferData(gl.ARRAY_BUFFER, new Uint8Array([
                 0.0, 0.0,
                 0.0, 1.0,
                 1.0, 0.0,
@@ -167,14 +255,6 @@ const ImageGLRenderable = Base => {
             gl.activeTexture(gl['TEXTURE0']);
 
             gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
-
-            this.posBuffer = this.createBuffer();
-            gl.bindBuffer(gl.ARRAY_BUFFER, this.posBuffer);
-            this.enableVertexAttrib(['a_position', 3]);
-
-            // Enable indices buffer
-            this.indicesBuffer = this.createBuffer();
-            gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.indicesBuffer);
         }
 
         /**
@@ -227,9 +307,7 @@ const ImageGLRenderable = Base => {
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
             gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-
             gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
-
             if (isInteger(log2(image.width)) && isInteger(log2(image.width))) {
                 gl.generateMipmap(gl.TEXTURE_2D);
             }
@@ -319,6 +397,10 @@ const ImageGLRenderable = Base => {
             if (!gl) {
                 return;
             }
+            if (this._debugBuffer) {
+                gl.deleteBuffer(this._debugBuffer);
+                delete this._debugBuffer;
+            }
             if (this._buffers) {
                 this._buffers.forEach(function (b) {
                     gl.deleteBuffer(b);
@@ -329,7 +411,14 @@ const ImageGLRenderable = Base => {
                 this._textures.forEach(t => gl.deleteTexture(t));
                 delete this._textures;
             }
-            delete this.posBuffer;
+            if (this._debugInfoCanvas) {
+                const texture = this._debugInfoCanvas.texture;
+                if (texture) {
+                    gl.deleteTexture(texture);
+                }
+                delete this._debugInfoCanvas.texture;
+                delete this._debugInfoCanvas;
+            }
             const program = gl.program;
             gl.deleteShader(program.fragmentShader);
             gl.deleteShader(program.vertexShader);
@@ -368,7 +457,7 @@ const ImageGLRenderable = Base => {
          * ]);
          */
         enableVertexAttrib(attributes) {
-            enableVertexAttrib(this.gl, attributes);
+            enableVertexAttrib(this.gl, this.gl.program, attributes);
         }
 
         /**
@@ -377,13 +466,19 @@ const ImageGLRenderable = Base => {
          * @param {String} frag a fragment shader program (string)
          * @return {WebGLProgram} created program object, or null if the creation has failed
          */
-        createProgram(vert, frag, uniforms) {
+        createProgram(vert, frag) {
             const gl = this.gl;
             const { program, vertexShader, fragmentShader } = createProgram(gl, vert, frag);
+            const numUniforms = gl.getProgramParameter(program, 0x8B86);
+            const activeUniforms = [];
+            for (let i = 0; i < numUniforms; ++i) {
+                const info = gl.getActiveUniform(program, i);
+                activeUniforms.push(info.name);
+            }
             program.vertexShader = vertexShader;
             program.fragmentShader = fragmentShader;
 
-            this._initUniforms(program, uniforms);
+            this._initUniforms(program, activeUniforms);
             return program;
         }
 
@@ -441,9 +536,9 @@ const ImageGLRenderable = Base => {
     };
 
     extend(renderable.prototype, {
-        set12: function () {
-            const out = Browser.ie9 ? null : new Float32Array(12);
-            return function (a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11) {
+        set8: function () {
+            const out = Browser.ie9 ? null : new Float32Array(8);
+            return function (a0, a1, a2, a3, a4, a5, a6, a7) {
                 out[0] = a0;
                 out[1] = a1;
                 out[2] = a2;
@@ -452,10 +547,21 @@ const ImageGLRenderable = Base => {
                 out[5] = a5;
                 out[6] = a6;
                 out[7] = a7;
-                out[8] = a8;
-                out[9] = a9;
-                out[10] = a10;
-                out[11] = a11;
+                return out;
+            };
+        }(),
+
+        set8Int: function () {
+            const out = Browser.ie9 ? null : new Int16Array(8);
+            return function (a0, a1, a2, a3, a4, a5, a6, a7) {
+                out[0] = a0;
+                out[1] = a1;
+                out[2] = a2;
+                out[3] = a3;
+                out[4] = a4;
+                out[5] = a5;
+                out[6] = a6;
+                out[7] = a7;
                 return out;
             };
         }()

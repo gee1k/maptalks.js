@@ -1,7 +1,8 @@
 import { GEOJSON_TYPES } from '../core/Constants';
-import { isNil, UID, isObject } from '../core/util';
+import { isNil, UID, isObject, extend, isFunction, parseStyleRootPath } from '../core/util';
 import Extent from '../geo/Extent';
-import { Geometry, GeometryCollection, LineString } from '../geometry';
+import { Geometry } from '../geometry';
+import { createFilter, getFilterFeature, compileStyle } from '@maptalks/feature-filter';
 import Layer from './Layer';
 import GeoJSON from '../geometry/GeoJSON';
 
@@ -16,6 +17,7 @@ import GeoJSON from '../geometry/GeoJSON';
 const options = {
     'drawImmediate' : false
 };
+
 
 /**
  * @classdesc
@@ -38,6 +40,10 @@ class OverlayLayer extends Layer {
         this._initCache();
         if (geometries) {
             this.addGeometry(geometries);
+        }
+        const style = this.options['style'];
+        if (style) {
+            this.setStyle(style);
         }
     }
 
@@ -152,8 +158,18 @@ class OverlayLayer extends Layer {
      * @param  {*} [context=undefined]  - Function's context, value to use as this when executing function.
      * @return {GeometryCollection} A GeometryCollection with all the geometries that pass the test
      */
-    filter() {
-        return GeometryCollection.prototype.filter.apply(this, arguments);
+    filter(fn, context) {
+        const selected = [];
+        const isFn = isFunction(fn);
+        const filter = isFn ? fn : createFilter(fn);
+
+        this.forEach(geometry => {
+            const g = isFn ? geometry : getFilterFeature(geometry);
+            if (context ? filter.call(context, g) : filter(g)) {
+                selected.push(geometry);
+            }
+        }, this);
+        return selected;
     }
 
     /**
@@ -167,7 +183,10 @@ class OverlayLayer extends Layer {
     /**
      * Adds one or more geometries to the layer
      * @param {Geometry|Geometry[]} geometries - one or more geometries
-     * @param {Boolean} [fitView=false]  - automatically set the map to a fit center and zoom for the geometries
+     * @param {Boolean|Object} [fitView=false]  - automatically set the map to a fit center and zoom for the geometries
+     * @param {String} [fitView.easing=out]  - default animation type
+     * @param {Number} [fitView.duration=map.options.zoomAnimationDuration]  - default animation time
+     * @param {Function} [fitView.step=null]  - step function during animation, animation frame as the parameter
      * @return {OverlayLayer} this
      */
     addGeometry(geometries, fitView) {
@@ -181,7 +200,7 @@ class OverlayLayer extends Layer {
             const last = arguments[count - 1];
             geometries = Array.prototype.slice.call(arguments, 0, count - 1);
             fitView = last;
-            if (isObject(last)) {
+            if (last && isObject(last) && (('type' in last) || last instanceof Geometry)) {
                 geometries.push(last);
                 fitView = false;
             }
@@ -191,7 +210,7 @@ class OverlayLayer extends Layer {
         }
         this._initCache();
         let extent;
-        if (fitView === true) {
+        if (fitView) {
             extent = new Extent();
         }
         this._toSort = this._maxZIndex > 0;
@@ -218,9 +237,22 @@ class OverlayLayer extends Layer {
         const map = this.getMap();
         if (map) {
             this._getRenderer().onGeometryAdd(geos);
-            if (fitView === true && !isNil(extent.xmin)) {
+            if (extent && !isNil(extent.xmin)) {
+                const center = extent.getCenter();
                 const z = map.getFitZoom(extent);
-                map.setCenterAndZoom(extent.getCenter(), z);
+
+                if (isObject(fitView)) {
+                    const step = isFunction(fitView.step) ? fitView.step : () => undefined;
+                    map.animateTo({
+                        center,
+                        zoom: z,
+                    }, extend({
+                        duration: map.options.zoomAnimationDuration,
+                        easing: 'out',
+                    }, fitView), step);
+                } else if (fitView === true) {
+                    map.setCenterAndZoom(center, z);
+                }
             }
         }
         /**
@@ -252,6 +284,7 @@ class OverlayLayer extends Layer {
         return this._maxZIndex;
     }
 
+
     _add(geo, extent, i) {
         if (!this._toSort) {
             this._toSort = geo.getZIndex() !== 0;
@@ -267,9 +300,7 @@ class OverlayLayer extends Layer {
         const internalId = UID();
         geo._setInternalId(internalId);
         this._geoList.push(geo);
-        if (this.onAddGeometry) {
-            this.onAddGeometry(geo);
-        }
+        this.onAddGeometry(geo);
         geo._bindLayer(this);
         if (geo.onAdd) {
             geo.onAdd();
@@ -289,6 +320,9 @@ class OverlayLayer extends Layer {
         geo._fireEvent('add', {
             'layer': this
         });
+        if (this._cookedStyles) {
+            this._styleGeometry(geo);
+        }
     }
 
     /**
@@ -378,57 +412,109 @@ class OverlayLayer extends Layer {
         }
     }
 
+    /**
+     * Gets layer's style.
+     * @return {Object|Object[]} layer's style
+     */
+    getStyle() {
+        if (!this.options['style']) {
+            return null;
+        }
+        return this.options['style'];
+    }
+
+    /**
+     * Sets style to the layer, styling the geometries satisfying the condition with style's symbol. <br>
+     * Based on filter type in [mapbox-gl-js's style specification]{https://www.mapbox.com/mapbox-gl-js/style-spec/#types-filter}.
+     * @param {Object|Object[]} style - layer's style
+     * @returns {VectorLayer} this
+     * @fires VectorLayer#setstyle
+     * @example
+     * layer.setStyle([
+        {
+          'filter': ['==', 'count', 100],
+          'symbol': {'markerFile' : 'foo1.png'}
+        },
+        {
+          'filter': ['==', 'count', 200],
+          'symbol': {'markerFile' : 'foo2.png'}
+        }
+      ]);
+     */
+    setStyle(style) {
+        this.options.style = style;
+        style = parseStyleRootPath(style);
+        this._cookedStyles = compileStyle(style);
+        this.forEach(function (geometry) {
+            this._styleGeometry(geometry);
+        }, this);
+        /**
+         * setstyle event.
+         *
+         * @event VectorLayer#setstyle
+         * @type {Object}
+         * @property {String} type - setstyle
+         * @property {VectorLayer} target - layer
+         * @property {Object|Object[]}       style - style to set
+         */
+        this.fire('setstyle', {
+            'style': style
+        });
+        return this;
+    }
+
+    _styleGeometry(geometry) {
+        if (!this._cookedStyles) {
+            return false;
+        }
+        const g = getFilterFeature(geometry);
+        for (let i = 0, len = this._cookedStyles.length; i < len; i++) {
+            if (this._cookedStyles[i]['filter'](g) === true) {
+                geometry._setExternSymbol(this._cookedStyles[i]['symbol']);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Removes layers' style
+     * @returns {VectorLayer} this
+     * @fires VectorLayer#removestyle
+     */
+    removeStyle() {
+        if (!this.options.style) {
+            return this;
+        }
+        delete this.options.style;
+        delete this._cookedStyles;
+        this.forEach(function (geometry) {
+            geometry._setExternSymbol(null);
+        }, this);
+        /**
+         * removestyle event.
+         *
+         * @event VectorLayer#removestyle
+         * @type {Object}
+         * @property {String} type - removestyle
+         * @property {VectorLayer} target - layer
+         */
+        this.fire('removestyle');
+        return this;
+    }
+
+    onAddGeometry(geo) {
+        const style = this.getStyle();
+        if (style) {
+            this._styleGeometry(geo);
+        }
+    }
+
     hide() {
         for (let i = 0, l = this._geoList.length; i < l; i++) {
             this._geoList[i].onHide();
         }
         return Layer.prototype.hide.call(this);
-    }
-
-    /**
-     * Identify the geometries on the given coordinate
-     * @param  {maptalks.Coordinate} coordinate   - coordinate to identify
-     * @param  {Object} [options=null]  - options
-     * @param  {Object} [options.tolerance=0] - identify tolerance in pixel
-     * @param  {Object} [options.count=null]  - result count
-     * @return {Geometry[]} geometries identified
-     */
-    identify(coordinate, options = {}) {
-        return this._hitGeos(this._geoList, coordinate, options);
-    }
-
-    _hitGeos(geometries, coordinate, options = {}) {
-        const filter = options['filter'],
-            tolerance = options['tolerance'],
-            hits = [];
-        const map = this.getMap();
-        const point = map.coordToPoint(coordinate);
-        const cp = map._pointToContainerPoint(point);
-        for (let i = geometries.length - 1; i >= 0; i--) {
-            const geo = geometries[i];
-            if (!geo || !geo.isVisible() || !geo._getPainter()) {
-                continue;
-            }
-            if (!(geo instanceof LineString) || !geo._getArrowStyle()) {
-                // Except for LineString with arrows
-                let extent = geo.getContainerExtent();
-                if (tolerance) {
-                    extent = extent.expand(tolerance);
-                }
-                if (!extent || !extent.contains(cp)) {
-                    continue;
-                }
-            }
-            if (geo._containsPoint(cp, tolerance) && (!filter || filter(geo))) {
-                hits.push(geo);
-                if (options['count']) {
-                    if (hits.length >= options['count']) {
-                        break;
-                    }
-                }
-            }
-        }
-        return hits;
     }
 
     _initCache() {
@@ -469,6 +555,7 @@ class OverlayLayer extends Layer {
         if (len === 0) {
             return -1;
         }
+        this._sortGeometries();
         let low = 0,
             high = len - 1,
             middle;

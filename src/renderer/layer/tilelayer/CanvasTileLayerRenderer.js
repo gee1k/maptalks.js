@@ -1,23 +1,24 @@
-import Browser from '../../../core/Browser';
 import CanvasTileLayer from '../../../layer/tile/CanvasTileLayer';
 import Canvas2D from '../../../core/Canvas';
 import TileLayerCanvasRenderer from './TileLayerCanvasRenderer';
-import TileLayerGLRenderer from './TileLayerCanvasRenderer';
+import TileLayerGLRenderer from './TileLayerGLRenderer';
 import Extent from '../../../geo/Extent';
+import Point from '../../../geo/Point';
 
 function loadTile(tile) {
     const tileSize = this.layer.getTileSize(),
         canvasClass = this.canvas.constructor,
         map = this.getMap();
-    const r = Browser.retina ? 2 : 1;
+    const r = map.getDevicePixelRatio();
     const tileCanvas = Canvas2D.createCanvas(tileSize['width'] * r, tileSize['height'] * r, canvasClass);
     tileCanvas['layer'] = this.layer;
     const me = this;
-    const extent = new Extent(map.pointToCoordinate(tile['point']), map.pointToCoordinate(tile['point'].add(tileSize.toPoint())), map.getProjection());
+    const point = new Point(tile['extent2d'].xmin, tile['extent2d'].ymax);
+    const extent = new Extent(map.pointToCoordinate(point), map.pointToCoordinate(point.add(tileSize.width, tileSize.height)), map.getProjection());
     this.layer.drawTile(tileCanvas, {
         'url': tile['url'],
-        'point': tile['point'],
-        'center' : map.pointToCoordinate(tile['point'].add(tileSize['width'] / 2, tileSize['height'] / 2)),
+        'point': point,
+        'center' : map.pointToCoordinate(point.add(tileSize['width'] / 2, tileSize['height'] / 2)),
         'extent' : extent,
         'z': tile['z'],
         'x' : tile['x'],

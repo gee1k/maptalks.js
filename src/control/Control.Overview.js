@@ -1,5 +1,5 @@
 import { extend, isFunction } from '../core/util';
-import { on, off, createEl } from '../core/util/dom';
+import { on, off, createEl, computeDomPosition } from '../core/util/dom';
 import Polygon from '../geometry/Polygon';
 import Layer from '../layer/Layer';
 import VectorLayer from '../layer/VectorLayer';
@@ -78,7 +78,7 @@ class Overview extends Control {
         if (this.options['maximize']) {
             this._createOverview();
         }
-        this.getMap().on('resize moving dragrotating viewchange', this._update, this)
+        this.getMap().on('resize moving zooming rotate dragrotating viewchange', this._update, this)
             .on('setbaselayer', this._updateBaseLayer, this)
             .on('spatialreferencechange', this._updateSpatialReference, this);
         on(this.button, 'click', this._onButtonClick, this);
@@ -87,7 +87,7 @@ class Overview extends Control {
 
     onRemove() {
         this.getMap()
-            .off('resize moving dragrotating viewchange', this._update, this)
+            .off('resize moving zooming rotate dragrotating viewchange', this._update, this)
             .off('setbaselayer', this._updateBaseLayer, this)
             .off('spatialreferencechange', this._updateSpatialReference, this);
         if (this._overview) {
@@ -98,14 +98,23 @@ class Overview extends Control {
         off(this.button, 'click', this._onButtonClick, this);
     }
 
+    /**
+     * Maximize overview control
+     * @returns {control.Overview}
+     */
     maxmize() {
         const size = this.options['size'];
         const dom = this.mapContainer;
         dom.style.width = size[0] + 'px';
         dom.style.height = size[1] + 'px';
         this._createOverview();
+        return this;
     }
 
+    /**
+     * Minimize overview control
+     * @returns {control.Overview}
+     */
     minimize() {
         if (this._overview) {
             this._overview.remove();
@@ -115,6 +124,15 @@ class Overview extends Control {
         const dom = this.mapContainer;
         dom.style.width = 0 + 'px';
         dom.style.height = 0 + 'px';
+        return this;
+    }
+
+    /**
+     * Return overview's map object
+     * @returns {Map}
+     */
+    getOverviewMap() {
+        return this._overview;
     }
 
     _onButtonClick() {
@@ -202,6 +220,8 @@ class Overview extends Control {
         if (!this._overview) {
             return;
         }
+        // refresh map's dom position
+        computeDomPosition(this._overview._containerDOM);
         const coords = this._getPerspectiveCoords();
         this._perspective.setCoordinates(coords);
         this._overview.setCenterAndZoom(this.getMap().getCenter(), this._getOverviewZoom());
